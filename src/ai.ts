@@ -79,6 +79,9 @@ export const DiagnosisSchema = z.object({
   difficulty: z.enum(["easy", "medium", "hard"]),
   minutes: z.number().describe("Estimated working time in minutes"),
   stop_and_call_pro_if: z.string().describe("The specific signs that mean: stop and call a professional"),
+  prevention: z
+    .array(z.string())
+    .describe("How to keep this from happening again: concrete habits or maintenance, with intervals (e.g. 'Descale every 3 months')"),
 });
 export type Diagnosis = z.infer<typeof DiagnosisSchema>;
 
@@ -90,7 +93,9 @@ How to help:
 - Use what you know about their item (brand, model, parts, past repairs) and their tools. Prefer a plan that uses tools they already have; if a tool is missing, say so and suggest a cheap alternative if one is safe.
 - Rank causes from most to least likely. Always start with the quick, free checks.
 - Steps must be concrete enough to follow with one hand while holding a phone: one action per step, say what to look for, mention the typical screw/fitting type and size when you know it.
-- If a photo is unclear or key information is missing, still give the best plan you can and ask up to 3 specific questions.
+- Photos come first: study every photo carefully before anything else and use what it shows (brand, model, label data, part types, damage, limescale, wear). Never ask a question a photo already answers. If something is not visible, say exactly what to photograph next (e.g. "a close-up of the label inside the door").
+- If key information is still missing, give the best plan you can and ask up to 3 specific questions.
+- Always end with prevention: how to keep this from happening again (habits, cleaning, maintenance intervals).
 - Be honest about uncertainty. Do not invent part numbers; if unsure, say what to measure or which label to read.
 
 Safety rules (these override everything):
@@ -146,7 +151,7 @@ export function buildContext(c: ContextInput): string {
   return lines.join("\n");
 }
 
-async function blobToBase64(blob: Blob): Promise<string> {
+export async function blobToBase64(blob: Blob): Promise<string> {
   const buf = new Uint8Array(await blob.arrayBuffer());
   let binary = "";
   const chunk = 0x8000;
@@ -156,8 +161,26 @@ async function blobToBase64(blob: Blob): Promise<string> {
   return btoa(binary);
 }
 
-/** Build the first user message: optional manual PDF, photos, then the context text. */
-export async function buildFirstMessage(contextText: string, photos: Blob[], manualPdf?: Blob): Promise<MessageParam> {
+type ImageMedia = "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+function imageMedia(b: Blob): ImageMedia {
+  return (["image/jpeg", "image/png", "image/webp", "image/gif"].includes(b.type) ? b.type : "image/jpeg") as ImageMedia;
+}
+
+export async function imageBlock(b: Blob): Promise<ContentBlockParam> {
+  return { type: "image", source: { type: "base64", media_type: imageMedia(b), data: await blobToBase64(b) } };
+}
+
+/**
+ * Build the first user message: optional manual PDF, photos, then the context text.
+ * `itemPhotos` is undefined for repairs made before item photos were sent; they keep the
+ * old layout so their saved conversation replays byte-for-byte.
+ */
+export async function buildFirstMessage(
+  contextText: string,
+  photos: Blob[],
+  manualPdf?: Blob,
+  itemPhotos?: Blob[],
+): Promise<MessageParam> {
   const content: ContentBlockParam[] = [];
   if (manualPdf) {
     content.push({
@@ -166,13 +189,17 @@ export async function buildFirstMessage(contextText: string, photos: Blob[], man
       title: "Manual for the item",
     });
   }
-  for (const p of photos) {
-    const media = (["image/jpeg", "image/png", "image/webp", "image/gif"].includes(p.type) ? p.type : "image/jpeg") as
-      | "image/jpeg"
-      | "image/png"
-      | "image/webp"
-      | "image/gif";
-    content.push({ type: "image", source: { type: "base64", media_type: media, data: await blobToBase64(p) } });
+  if (itemPhotos === undefined) {
+    for (const p of photos) content.push(await imageBlock(p));
+  } else {
+    if (itemPhotos.length) {
+      content.push({ type: "text", text: "Photos of the item from the user's inventory (e.g. its type label):" });
+      for (const p of itemPhotos) content.push(await imageBlock(p));
+    }
+    if (photos.length) {
+      content.push({ type: "text", text: "Photos of the problem, taken now:" });
+      for (const p of photos) content.push(await imageBlock(p));
+    }
   }
   content.push({ type: "text", text: contextText });
   return { role: "user", content };
@@ -251,7 +278,7 @@ export async function followUp(opts: {
     max_tokens: 16000,
     system:
       systemPrompt(opts.lang, opts.region) +
-      "\n\nFor follow-up questions, answer in short plain text (no JSON): what to do next, step by step if needed.",
+      "\n\nFor follow-up questions, answer in short plain text (no JSON): what to do next, step by step if needed. If the user attached new photos, first say in one sentence what you see in them, then use it.",
     output_config: { effort: opts.model === MODELS.strong ? "high" : "medium" },
     messages: opts.messages,
   });
@@ -267,6 +294,47 @@ export async function followUp(opts: {
     model: opts.model,
     ...usageOf(opts.model, res),
   };
+}
+
+export const IdentifySchema = z.object({
+  name: z.string().describe("Short generic name in the user's language, e.g. 'Dishwasher', 'City bike'. Empty if unclear."),
+  area: z.string().describe("Exactly one of the given area names that fits best, or empty"),
+  brand: z.string().describe("Manufacturer as printed, or empty"),
+  model: z.string().describe("Model / type number exactly as printed (e.g. 'SMV4HTX31E'), or empty"),
+  serial: z.string().describe("Serial number as printed, or empty"),
+  year: z.string().describe("Production or purchase year if printed, or empty"),
+  specs: z
+    .string()
+    .describe("Other useful data READ from the label or obvious from the photo (E-Nr, FD, voltage/power, tyre size, bulb type). Never guess. Empty if none."),
+  manual_query: z.string().describe("Best web search query to find the official manual PDF, or empty"),
+  comment: z.string().describe("One short sentence: what you could read, or what to photograph instead"),
+});
+export type Identified = z.infer<typeof IdentifySchema>;
+
+/** Read brand, model etc. from photos of an item (ideally its type label). */
+export async function identifyItem(opts: {
+  apiKey: string;
+  lang: Lang;
+  photos: Blob[];
+  areaNames: string[];
+}): Promise<AiResult<Identified>> {
+  const language = opts.lang === "de" ? "German" : "English";
+  const content: ContentBlockParam[] = [];
+  for (const p of opts.photos) content.push(await imageBlock(p));
+  content.push({
+    type: "text",
+    text: `These photos show something in my home (often its type label). Fill in what you can READ or clearly see. Do not guess numbers. Areas to choose from: ${opts.areaNames.join(", ")}. Write name and comment in ${language}.`,
+  });
+  const model = MODELS.fast;
+  const res = await client(opts.apiKey).messages.parse({
+    model,
+    max_tokens: 16000,
+    output_config: { effort: "medium", format: zodOutputFormat(IdentifySchema) },
+    messages: [{ role: "user", content }],
+  });
+  if (res.stop_reason === "refusal") throw new RefusalError("refusal");
+  if (!res.parsed_output) throw new Error("The AI returned an answer the app couldn't read. Try again.");
+  return { value: res.parsed_output, assistantTurn: { role: "assistant", content: toReplayable(res) }, model, ...usageOf(model, res) };
 }
 
 /** Cheapest possible call, to check that a key works. */

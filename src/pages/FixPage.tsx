@@ -6,6 +6,7 @@ import { useI18n } from "../i18n";
 import { describeError, RefusalError } from "../ai";
 import { startRepair } from "../repairs";
 import { Header, PhotoPicker } from "../components/ui";
+import { DictationTextarea } from "../components/Dictation";
 
 export default function FixPage() {
   const { t } = useI18n();
@@ -67,10 +68,11 @@ export default function FixPage() {
         </label>
         <label>
           {t.whatsWrong} *
-          <textarea rows={5} value={problem} onChange={(e) => setProblem(e.target.value)} placeholder={t.whatsWrongPlaceholder} required />
+          <DictationTextarea rows={5} value={problem} onChange={setProblem} placeholder={t.whatsWrongPlaceholder} required />
         </label>
         <div>
           <span className="label">{t.photos}</span>
+          <small className="muted">{t.problemPhotoHint}</small>
           <PhotoPicker ids={photoIds} onChange={setPhotoIds} />
         </div>
         {item?.manualFileId && (

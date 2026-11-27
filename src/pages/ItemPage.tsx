@@ -3,9 +3,10 @@ import { Link, useParams } from "react-router-dom";
 import { db } from "../db";
 import { useI18n } from "../i18n";
 import { Header, StatusBadge, Thumb, useFileUrl } from "../components/ui";
+import { manualSearchUrl } from "./ItemForm";
 
 export default function ItemPage() {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const id = Number(useParams().id);
   const item = useLiveQuery(() => db.items.get(id), [id]);
   const area = useLiveQuery(() => (item ? db.areas.get(item.areaId) : undefined), [item?.areaId]);
@@ -54,7 +55,7 @@ export default function ItemPage() {
             </div>
           ))}
       </dl>
-      {(manualUrl || item.manualUrl) && (
+      {(manualUrl || item.manualUrl || item.brand || item.model) && (
         <section>
           <h2>{t.manual}</h2>
           <div className="row-wrap">
@@ -66,6 +67,11 @@ export default function ItemPage() {
             {item.manualUrl && (
               <a className="btn" href={item.manualUrl} target="_blank" rel="noreferrer">
                 🔗 {t.manualUrl}
+              </a>
+            )}
+            {!manualUrl && !item.manualUrl && (
+              <a className="btn" href={manualSearchUrl(item.brand, item.model, lang)} target="_blank" rel="noreferrer">
+                🔎 {t.findManual}
               </a>
             )}
           </div>
