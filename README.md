@@ -49,4 +49,16 @@ npm run build      # type-check + production build into dist/
 
 ## Deploying
 
-The build output (`dist/`) is a static site that any static host can serve. On iPhone, open it in Safari → Share → *Add to Home Screen*. Do this, or Safari may delete the app's data after a few weeks without use.
+Every push to `main` builds, tests and publishes the app to GitHub Pages (`.github/workflows/deploy.yml`):
+
+**https://benev89.github.io/DIY-Home/**
+
+One-time setup: repo *Settings → Pages → Build and deployment → Source: GitHub Actions*.
+
+### Installing on iPhone
+
+1. Open the link above **in Safari** (other browsers can't install web apps on iOS).
+2. Tap the Share button (square with arrow) → *Add to Home Screen* → *Add*.
+3. Always start it from the home-screen icon. That copy keeps its data. A Safari tab may delete it after a few weeks without use.
+
+Updates install themselves: after we push a change, close and reopen the app (sometimes twice).
