@@ -1,6 +1,6 @@
 import { useLiveQuery } from "dexie-react-hooks";
 import { Link } from "react-router-dom";
-import { db } from "../db";
+import { db, deleteRepair } from "../db";
 import { useI18n } from "../i18n";
 import { Header, StatusBadge } from "../components/ui";
 
@@ -16,7 +16,7 @@ export default function HistoryPage() {
       {repairs?.length === 0 && <p className="muted">{t.noRepairs}</p>}
       <ul className="list">
         {repairs?.map((r) => (
-          <li key={r.id}>
+          <li key={r.id} className="row-with-action">
             <Link to={`/repair/${r.id}`} className="row">
               <span className="grow">
                 <strong>{r.title}</strong>
@@ -27,6 +27,15 @@ export default function HistoryPage() {
               </span>
               <StatusBadge status={r.status} />
             </Link>
+            <button
+              className="icon-btn"
+              aria-label={t.delete}
+              onClick={() => {
+                if (confirm(`${r.title}\n\n${t.confirmDelete}`)) void deleteRepair(r.id!);
+              }}
+            >
+              🗑
+            </button>
           </li>
         ))}
       </ul>

@@ -1,12 +1,14 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { Link, useParams } from "react-router-dom";
-import { db, type RepairStatus } from "../db";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { addTask, db, deleteRepair, type RepairStatus } from "../db";
 import { useI18n } from "../i18n";
-import { describeError, MODELS, RefusalError } from "../ai";
+import { describeError, MODELS, preventionTips, RefusalError } from "../ai";
 import { askFollowUp, thinkHarder } from "../repairs";
 import { formatUsd, Header, PhotoPicker, Thumb } from "../components/ui";
 import { DictationTextarea } from "../components/Dictation";
+import { useDraft } from "../persist";
+import { intervalLabel } from "../care";
 
 const STATUSES: RepairStatus[] = ["open", "fixed", "not_fixed", "pro"];
 
@@ -15,14 +17,18 @@ export default function RepairPage() {
   const id = Number(useParams().id);
   const repair = useLiveQuery(() => db.repairs.get(id), [id]);
   const item = useLiveQuery(() => (repair?.itemId ? db.items.get(repair.itemId) : undefined), [repair?.itemId]);
-  const [question, setQuestion] = useState("");
-  const [questionPhotos, setQuestionPhotos] = useState<number[]>([]);
+  const navigate = useNavigate();
+  // Follow-up text and photos are drafts: they survive closing the app.
+  const [fu, setFu, , clearFu] = useDraft<{ q: string; photos: number[] }>(`followup:${id}`, { q: "", photos: [] });
+  const question = fu.q;
+  const questionPhotos = fu.photos;
+  const setQuestion = (q: string) => setFu((d) => ({ ...d, q }));
+  const setQuestionPhotos = (photos: number[]) => setFu((d) => ({ ...d, photos }));
+  const tasks = useLiveQuery(() => db.tasks.toArray(), []);
+  const [outcome, setOutcome] = useState<string>();
   const [strong, setStrong] = useState(false);
   const [busy, setBusy] = useState<"followup" | "harder" | null>(null);
   const [error, setError] = useState<string>();
-  const [outcome, setOutcome] = useState("");
-
-  useEffect(() => setOutcome(repair?.outcome ?? ""), [repair?.outcome]);
 
   if (!repair) return null;
   const d = repair.diagnosis;
@@ -50,8 +56,7 @@ export default function RepairPage() {
     if (!q) return;
     void run("followup", async () => {
       await askFollowUp(id, q, strong ? MODELS.strong : MODELS.fast, questionPhotos);
-      setQuestion("");
-      setQuestionPhotos([]);
+      clearFu();
     });
   };
 
@@ -197,13 +202,28 @@ export default function RepairPage() {
             </div>
           )}
 
-          {!!d.prevention?.length && (
+          {preventionTips(d).length > 0 && (
             <section className={`prevention ${repair.status === "fixed" ? "highlight" : ""}`}>
               <h2>🛡️ {t.prevention}</h2>
-              <ul>
-                {d.prevention.map((p, i) => (
-                  <li key={i}>{p}</li>
-                ))}
+              <ul className="tips">
+                {preventionTips(d).map((p, i) => {
+                  const added = tasks?.some((tk) => tk.title === p.tip && tk.itemId === repair.itemId);
+                  return (
+                    <li key={i}>
+                      <span>{p.tip}</span>
+                      {p.interval_days > 0 && (
+                        <button
+                          className={`pick small-pick ${added ? "on" : ""}`}
+                          disabled={added}
+                          onClick={() => addTask({ itemId: repair.itemId, title: p.tip, intervalDays: Math.round(p.interval_days) })}
+                        >
+                          <span className="pick-mark">{added ? "✓" : "＋"}</span>
+                          {added ? t.reminderAdded : `${t.addReminder} · ${intervalLabel(p.interval_days, t)}`}
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           )}
@@ -260,16 +280,29 @@ export default function RepairPage() {
           {t.outcome}
           <DictationTextarea
             rows={2}
-            value={outcome}
+            value={outcome ?? repair.outcome ?? ""}
             placeholder={t.outcomePlaceholder}
-            onChange={setOutcome}
-            onBlur={() => db.repairs.update(id, { outcome: outcome.trim() || undefined, updatedAt: Date.now() })}
+            onChange={(v) => {
+              setOutcome(v);
+              void db.repairs.update(id, { outcome: v, updatedAt: Date.now() }); // saved on every keystroke
+            }}
           />
         </label>
         <p className="muted small">
           {t.cost}: {formatUsd(repair.costUsd)}
         </p>
       </section>
+      <button
+        className="btn ghost block danger"
+        onClick={async () => {
+          if (!confirm(t.confirmDelete)) return;
+          await deleteRepair(id);
+          clearFu();
+          navigate(-1);
+        }}
+      >
+        🗑 {t.delete}
+      </button>
     </>
   );
 }

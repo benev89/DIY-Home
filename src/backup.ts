@@ -33,6 +33,7 @@ export async function exportAll(): Promise<string> {
     tools: await db.tools.toArray(),
     repairs: await db.repairs.toArray(),
     usage: await db.usage.toArray(),
+    tasks: await db.tasks.toArray(),
     settings: (await db.settings.toArray()).filter((s) => !PRIVATE_SETTINGS.has(s.key)),
     files: await Promise.all(
       files.map(async (f) => ({ id: f.id, name: f.name, type: f.type, createdAt: f.createdAt, data: await blobToDataUrl(f.blob) })),
@@ -45,7 +46,7 @@ export async function importAll(json: string): Promise<void> {
   const b = JSON.parse(json);
   if (b?.format !== FORMAT) throw new Error("This is not a DIY Home backup file.");
   if (b.version > VERSION) throw new Error("This backup is from a newer version of the app.");
-  const tables = [db.areas, db.items, db.tools, db.repairs, db.usage, db.settings, db.files];
+  const tables = [db.areas, db.items, db.tools, db.repairs, db.usage, db.settings, db.files, db.tasks];
   await db.transaction("rw", tables, async () => {
     const apiKey = await db.settings.get("apiKey");
     await Promise.all(tables.map((t) => t.clear()));
@@ -54,6 +55,7 @@ export async function importAll(json: string): Promise<void> {
     await db.tools.bulkAdd(b.tools);
     await db.repairs.bulkAdd(b.repairs);
     await db.usage.bulkAdd(b.usage ?? []);
+    await db.tasks.bulkAdd(b.tasks ?? []);
     await db.settings.bulkPut(b.settings);
     if (apiKey) await db.settings.put(apiKey); // keep this device's key
     await db.files.bulkAdd(

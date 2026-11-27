@@ -4,6 +4,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { db, deleteItem, getSetting, saveFile, type Item } from "../db";
 import { useI18n, type Lang } from "../i18n";
 import { describeError, identifyItem, RefusalError } from "../ai";
+import { autoFindManual } from "../manual";
 import { Header, PhotoPicker } from "../components/ui";
 import { DictationTextarea } from "../components/Dictation";
 
@@ -17,40 +18,90 @@ export function manualSearchUrl(brand: string | undefined, model: string | undef
   return `https://www.google.com/search?q=${encodeURIComponent(q)}`;
 }
 
+const hasContent = (d: Draft) => !!(d.name.trim() || d.photoIds.length || d.brand || d.model || d.notes || d.specs);
+
+/**
+ * Add/edit an item. There is no "save" step: every change is written to the database right
+ * away, so nothing is lost if the app is closed. A new item is created as soon as it has a
+ * photo or any text.
+ */
 export default function ItemForm() {
   const { t, lang } = useI18n();
   const navigate = useNavigate();
   const params = useParams();
   const [search] = useSearchParams();
-  const editId = params.id ? Number(params.id) : undefined;
   const areaFromUrl = Number(search.get("area")) || 0;
   const areas = useLiveQuery(() => db.areas.orderBy("order").toArray(), []);
   const apiKey = useLiveQuery(async () => (await db.settings.get("apiKey"))?.value as string | undefined, []);
   const pdfInput = useRef<HTMLInputElement>(null);
 
+  const [itemId, setItemId] = useState<number | undefined>(params.id ? Number(params.id) : undefined);
+  const itemIdRef = useRef(itemId);
+  const creating = useRef<Promise<number> | null>(null);
   const [draft, setDraft] = useState<Draft>({ areaId: areaFromUrl, name: "", photoIds: [] });
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const [loaded, setLoaded] = useState(!params.id);
   const [manualName, setManualName] = useState<string>();
   const [reading, setReading] = useState(false);
   const [readResult, setReadResult] = useState<{ filled: string[]; comment: string; query: string }>();
   const [readError, setReadError] = useState<string>();
-  const areaTouched = useRef(!!areaFromUrl || !!editId);
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
+  const [manualState, setManualState] = useState<"searching" | "found" | "none" | "error">();
+  const areaTouched = useRef(!!areaFromUrl || !!params.id);
+  const isNew = !params.id;
 
   useEffect(() => {
-    if (!editId) return;
-    db.items.get(editId).then(async (item) => {
+    if (!params.id) return;
+    db.items.get(Number(params.id)).then(async (item) => {
       if (!item) return;
       setDraft(item);
+      setLoaded(true);
       if (item.manualFileId) setManualName((await db.files.get(item.manualFileId))?.name);
     });
-  }, [editId]);
+  }, [params.id]);
 
   useEffect(() => {
     if (!draft.areaId && areas?.length) setDraft((d) => ({ ...d, areaId: areas[0].id! }));
   }, [areas, draft.areaId]);
 
-  const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setDraft((d) => ({ ...d, [k]: v }));
+  /** Write the draft to the database (create the item the first time). Returns the item id. */
+  const persist = async (next: Draft): Promise<number | undefined> => {
+    const record = { ...next, name: next.name.trim() || t.newItem, updatedAt: Date.now() };
+    if (itemIdRef.current) {
+      await db.items.update(itemIdRef.current, record);
+      return itemIdRef.current;
+    }
+    if (!hasContent(next) || !next.areaId) return undefined;
+    if (!creating.current) {
+      creating.current = db.items.add({ ...record, createdAt: Date.now() }).then((id) => {
+        itemIdRef.current = id as number;
+        setItemId(id as number);
+        return id as number;
+      });
+      return creating.current;
+    }
+    const id = await creating.current; // a create is in flight: wait for it, then update
+    await db.items.update(id, record);
+    return id;
+  };
+
+  const apply = (next: Draft) => {
+    setDraft(next);
+    draftRef.current = next;
+    return persist(next);
+  };
+  const set = <K extends keyof Draft>(k: K, v: Draft[K]) => void apply({ ...draftRef.current, [k]: v });
+
+  const searchManual = async (id: number) => {
+    setManualState("searching");
+    try {
+      const found = await autoFindManual(id);
+      if (found) setDraft((d) => (d.manualUrl ? d : { ...d, manualUrl: found.url }));
+      setManualState(found ? "found" : "none");
+    } catch {
+      setManualState("error");
+    }
+  };
 
   /** Ask the AI to read the photos; fill only fields that are still empty. */
   const readPhotos = async (photoIds: number[]) => {
@@ -67,14 +118,7 @@ export default function ItemForm() {
       });
       await db.usage.add({ at: Date.now(), model: res.model, inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd });
       const v = res.value;
-      const found: Partial<Record<TextField, string>> = {
-        name: v.name,
-        brand: v.brand,
-        model: v.model,
-        serial: v.serial,
-        purchased: v.year,
-        specs: v.specs,
-      };
+      const found: Record<TextField, string> = { name: v.name, brand: v.brand, model: v.model, serial: v.serial, purchased: v.year, specs: v.specs };
       const labels: Record<TextField, string> = { name: t.name, brand: t.brand, model: t.model, serial: t.serial, purchased: t.purchased, specs: t.specs };
       const filled: string[] = [];
       const d = draftRef.current; // latest form state, including anything typed while reading
@@ -91,8 +135,13 @@ export default function ItemForm() {
         next.areaId = area.id!;
         filled.push(t.area);
       }
-      setDraft(next);
+      const id = await apply(next);
       setReadResult({ filled, comment: v.comment, query: v.manual_query });
+      // Brand/model known and no manual yet: look for it straight away.
+      const item = id ? await db.items.get(id) : undefined;
+      if (id && item && (item.brand || item.model) && !item.manualUrl && !item.manualFileId && !item.manualSearchedAt) {
+        void searchManual(id);
+      }
     } catch (err) {
       setReadError(err instanceof RefusalError ? t.refused : `${t.errorPrefix} ${describeError(err)}`);
     } finally {
@@ -101,8 +150,8 @@ export default function ItemForm() {
   };
 
   const onPhotos = (ids: number[]) => {
-    const added = ids.length > draft.photoIds.length;
-    set("photoIds", ids);
+    const added = ids.length > draftRef.current.photoIds.length;
+    void apply({ ...draftRef.current, photoIds: ids });
     if (added) void readPhotos(ids);
   };
 
@@ -113,23 +162,14 @@ export default function ItemForm() {
     setManualName(f.name);
   };
 
-  const save = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!draft.name.trim()) return;
-    const now = Date.now();
-    const clean = { ...draft, name: draft.name.trim() };
-    if (editId) {
-      await db.items.update(editId, { ...clean, updatedAt: now });
-      navigate(-1);
-    } else {
-      const id = await db.items.add({ ...clean, createdAt: now, updatedAt: now });
-      navigate(`/item/${id}`, { replace: true });
-    }
+  const done = () => {
+    if (itemId) navigate(`/item/${itemId}`, { replace: true });
+    else navigate(-1);
   };
 
   const remove = async () => {
-    if (!editId || !confirm(t.confirmDelete)) return;
-    await deleteItem(editId);
+    if (!itemId || !confirm(t.confirmDelete)) return;
+    await deleteItem(itemId);
     navigate(`/area/${draft.areaId}`, { replace: true });
   };
 
@@ -140,10 +180,11 @@ export default function ItemForm() {
     </label>
   );
 
+  if (!loaded) return null;
   return (
     <>
-      <Header back title={editId ? t.editItem : t.addItem} />
-      <form onSubmit={save} className="form">
+      <Header back title={isNew ? t.addItem : t.editItem} />
+      <form onSubmit={(e) => (e.preventDefault(), done())} className="form">
         <div className="photo-first">
           <span className="label">📷 {t.photos}</span>
           <small className="muted">{apiKey ? t.photoFirstHint : t.modelHint}</small>
@@ -170,7 +211,7 @@ export default function ItemForm() {
 
         <label>
           {t.name} *
-          <input value={draft.name} onChange={(e) => set("name", e.target.value)} placeholder={t.namePlaceholder} required />
+          <input value={draft.name} onChange={(e) => set("name", e.target.value)} placeholder={t.namePlaceholder} />
         </label>
         <label>
           {t.area}
@@ -203,11 +244,26 @@ export default function ItemForm() {
 
         <div>
           <span className="label">{t.manual}</span>
+          {manualState === "searching" && <p className="spinner muted">{t.searchingManual}</p>}
+          {manualState === "found" && <p className="ok-text">✓ {t.manualFound}</p>}
+          {(manualState === "none" || manualState === "error") && <p className="muted">{t.manualNotFound}</p>}
           <div className="row-wrap">
-            {(draft.brand || draft.model) && (
-              <a className="btn" href={manualSearchUrl(draft.brand, draft.model, lang, readResult?.query)} target="_blank" rel="noreferrer">
-                🔎 {t.findManual}
+            {draft.manualUrl && (
+              <a className="btn" href={draft.manualUrl} target="_blank" rel="noreferrer">
+                🔗 {t.openManual}
               </a>
+            )}
+            {!draft.manualUrl && (draft.brand || draft.model) && (
+              <>
+                {apiKey && itemId && manualState !== "searching" && (
+                  <button type="button" className="btn" onClick={() => searchManual(itemId)}>
+                    ✨ {t.searchManualAuto}
+                  </button>
+                )}
+                <a className="btn" href={manualSearchUrl(draft.brand, draft.model, lang, readResult?.query)} target="_blank" rel="noreferrer">
+                  🔎 {t.findManual}
+                </a>
+              </>
             )}
             <button type="button" className="btn" onClick={() => pdfInput.current?.click()}>
               📄 {manualName ?? t.manualPdf}
@@ -217,10 +273,11 @@ export default function ItemForm() {
         </div>
         {field("manualUrl", t.manualUrl)}
 
+        <p className="muted small center">{itemId ? `✓ ${t.autoSaved}` : t.autoSaveHint}</p>
         <button className="btn primary block" type="submit">
-          {t.save}
+          {t.done}
         </button>
-        {editId && (
+        {itemId && (
           <button type="button" className="btn ghost block danger" onClick={remove}>
             {t.delete}
           </button>
