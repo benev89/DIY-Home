@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useSearchParams } from "react-router-dom";
 import { addTask, db } from "../db";
@@ -6,6 +6,9 @@ import { useI18n } from "../i18n";
 import { bucket, INTERVAL_CHOICES, intervalLabel, type DueBucket } from "../care";
 import { Header } from "../components/ui";
 import { TaskRow } from "../components/TaskRow";
+import { exportToCalendar } from "../calendar";
+import { loadMissingCareSuggestions } from "../careAi";
+import { Link } from "react-router-dom";
 
 export default function CarePage() {
   const { t } = useI18n();
@@ -16,6 +19,20 @@ export default function CarePage() {
   const [title, setTitle] = useState("");
   const [itemId, setItemId] = useState<number | undefined>(Number(search.get("item")) || undefined);
   const [intervalDays, setIntervalDays] = useState(90);
+  const [loadingLeft, setLoadingLeft] = useState(0);
+  const apiKey = useLiveQuery(async () => (await db.settings.get("apiKey"))?.value as string | undefined, []);
+
+  // Every item in your list gets maintenance ideas automatically (fetched once per item).
+  useEffect(() => {
+    if (apiKey) void loadMissingCareSuggestions(setLoadingLeft);
+  }, [apiKey, items?.length]);
+
+  const suggestionsByItem = (items ?? [])
+    .map((it) => ({
+      it,
+      open: (it.careSuggestions ?? []).filter((sg) => !tasks?.some((tk) => tk.itemId === it.id && tk.title === sg.title)),
+    }))
+    .filter((x) => x.open.length > 0);
 
   const nameOf = (id?: number) => items?.find((i) => i.id === id)?.name;
   const groups: [DueBucket, string][] = [
@@ -53,6 +70,35 @@ export default function CarePage() {
           </section>
         );
       })}
+
+      {!!tasks?.length && (
+        <button className="btn block" onClick={() => exportToCalendar(tasks.map((x) => ({ ...x, itemName: nameOf(x.itemId) })))}>
+          📅 {t.allToCalendar}
+        </button>
+      )}
+
+      {(suggestionsByItem.length > 0 || loadingLeft > 0) && (
+        <section>
+          <h2>✨ {t.careSuggestionsForItems}</h2>
+          <p className="muted small">{t.careSuggestionsHint}</p>
+          {loadingLeft > 0 && <p className="spinner muted">{t.loadingCareFor.replace("{n}", String(loadingLeft))}</p>}
+          {suggestionsByItem.map(({ it, open }) => (
+            <div key={it.id} className="sugg-group">
+              <Link to={`/item/${it.id}`} className="small">
+                {it.name} ›
+              </Link>
+              <div className="chip-grid">
+                {open.map((sg) => (
+                  <button key={sg.title} className="pick" title={sg.how} onClick={() => addTask({ itemId: it.id, title: sg.title, how: sg.how, intervalDays: sg.intervalDays })}>
+                    <span className="pick-mark">＋</span>
+                    {sg.title} · {intervalLabel(sg.intervalDays, t)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
 
       {adding ? (
         <form onSubmit={add} className="form card-form">

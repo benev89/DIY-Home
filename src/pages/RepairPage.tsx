@@ -8,6 +8,7 @@ import { askFollowUp, thinkHarder } from "../repairs";
 import { formatUsd, Header, PhotoPicker, Thumb } from "../components/ui";
 import { DictationTextarea } from "../components/Dictation";
 import { useDraft } from "../persist";
+import { NeedsList } from "../components/NeedsList";
 import { intervalLabel } from "../care";
 
 const STATUSES: RepairStatus[] = ["open", "fixed", "not_fixed", "pro"];
@@ -102,6 +103,23 @@ export default function RepairPage() {
           )}
 
           <p>{d.summary}</p>
+          {repair.research && (
+            <details className="research">
+              <summary>
+                🔎 {t.researchFound} ({repair.research.sources.length} {t.sources})
+              </summary>
+              <p className="pre">{repair.research.summary}</p>
+              <ul>
+                {repair.research.sources.map((src) => (
+                  <li key={src.url}>
+                    <a href={src.url} target="_blank" rel="noreferrer">
+                      {src.title}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           <p className="chips">
             <span className="chip">
               {t.difficulty}: {t[`difficulty_${d.difficulty}`]}
@@ -152,23 +170,15 @@ export default function RepairPage() {
           {(d.tools.length > 0 || d.parts.length > 0) && (
             <section>
               <h2>{t.youNeed}</h2>
-              <ul className="needs">
-                {d.tools.map((tool, i) => (
-                  <li key={`t${i}`} className={tool.owned ? "have" : "missing"}>
-                    {tool.owned ? "✓" : "✗"} {tool.name} <small>({tool.owned ? t.youHave : t.youDontHave})</small>
-                  </li>
-                ))}
-              </ul>
+              <p className="muted small">{t.needsHint}</p>
+              <NeedsList kind="tool" needs={d.tools.map((x) => ({ name: x.name, ownedAs: x.owned_as ?? (x.owned ? undefined : "") }))} />
               {d.parts.length > 0 && (
                 <>
                   <h3>{t.parts}</h3>
-                  <ul>
-                    {d.parts.map((p, i) => (
-                      <li key={`p${i}`}>
-                        <strong>{p.name}</strong> – {p.spec} <small className="muted">{p.price_estimate}</small>
-                      </li>
-                    ))}
-                  </ul>
+                  <NeedsList
+                    kind="supply"
+                    needs={d.parts.map((p) => ({ name: p.name, detail: [p.spec, p.price_estimate].filter(Boolean).join(" · "), ownedAs: "" }))}
+                  />
                 </>
               )}
             </section>

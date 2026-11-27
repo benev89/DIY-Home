@@ -67,6 +67,9 @@ export const DiagnosisSchema = z.object({
     z.object({
       name: z.string(),
       owned: z.boolean().describe("true only if it is in the user's tool list"),
+      owned_as: z
+        .string()
+        .describe("If owned: the exact entry from the user's tool or supply list that covers it, copied verbatim. Else empty."),
     }),
   ),
   parts: z.array(
@@ -110,6 +113,8 @@ How to help:
 - If key information is still missing, give the best plan you can and ask up to 3 specific questions.
 - Always end with prevention: how to keep this from happening again (habits, cleaning, maintenance intervals).
 - Be honest about uncertainty. Do not invent part numbers; if unsure, say what to measure or which label to read.
+- Error/fault codes differ between manufacturers and even models. Only state a code's meaning if web research below confirms it or you are certain for this exact model; otherwise say clearly that you are not sure and tell the user to check the manual's error-code table.
+- If a "Web research" section is given, prefer it over your own memory, and mention when your plan relies on it.
 
 Safety rules (these override everything):
 - Set safety.level to "stop" and give no hands-on repair steps beyond making things safe (e.g. close the gas valve, switch off the breaker, open windows, leave the building) for: anything on gas appliances or gas lines; work on the fixed electrical installation (wiring in walls, fuse box, sockets/switches wiring) where local law requires an electrician; load-bearing structures; suspected asbestos; refrigerant circuits; anything at dangerous height without proper equipment.
@@ -134,6 +139,7 @@ export interface ContextInput {
   tools: string[];
   supplies: string[];
   problem: string;
+  research?: string;
 }
 
 /** The text part of the first message. Frozen into the repair so follow-ups replay identical history. */
@@ -161,6 +167,7 @@ export function buildContext(c: ContextInput): string {
   lines.push("", "## Tools the user owns", c.tools.length ? c.tools.map((t) => `- ${t}`).join("\n") : "- (none listed)");
   if (c.supplies.length) lines.push("", "## Supplies at home", c.supplies.map((s) => `- ${s}`).join("\n"));
   lines.push("", "## The problem", c.problem.trim());
+  if (c.research) lines.push("", "## Web research (done just now for this problem)", c.research.trim());
   return lines.join("\n");
 }
 
@@ -389,6 +396,89 @@ Suggest the regular maintenance and care this item needs in a normal household (
   return { value: res.parsed_output, assistantTurn: { role: "assistant", content: toReplayable(res) }, model, ...usageOf(model, res) };
 }
 
+type Source = { title: string; url: string };
+
+/** Run one request with the web search tool, continuing if the server pauses the turn. */
+async function withWebSearch(apiKey: string, prompt: string, maxUses: number) {
+  const model = MODELS.strong;
+  const messages: MessageParam[] = [{ role: "user", content: prompt }];
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let searches = 0;
+  let res: Message | undefined;
+  for (let round = 0; round < 3; round++) {
+    res = await client(apiKey).messages.create({
+      model,
+      max_tokens: 16000,
+      output_config: { effort: "low" },
+      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: maxUses }],
+      messages,
+    });
+    const u = usageOf(model, res);
+    inputTokens += u.inputTokens;
+    outputTokens += u.outputTokens;
+    searches += res.usage.server_tool_use?.web_search_requests ?? 0;
+    if (res.stop_reason !== "pause_turn") break;
+    messages.push({ role: "assistant", content: toReplayable(res) });
+  }
+  if (!res || res.stop_reason === "refusal") throw new RefusalError("refusal");
+  const textBlocks = res.content.filter((b) => b.type === "text");
+  const text = textBlocks.map((b) => b.text).join("");
+  // Sources = pages the answer actually cites (they come from real search results).
+  const sources: Source[] = [];
+  for (const b of textBlocks) {
+    for (const c of b.citations ?? []) {
+      if (c.type === "web_search_result_location" && !sources.some((x) => x.url === c.url)) {
+        sources.push({ title: c.title ?? c.url, url: c.url });
+      }
+    }
+  }
+  const cost = costUsd(model, inputTokens, outputTokens) + searches * 0.01; // $10 per 1,000 searches
+  return { res, text, sources, model, inputTokens, outputTokens, costUsd: cost };
+}
+
+export interface Research {
+  summary: string;
+  sources: Source[];
+}
+
+/** Look the problem up online first: error codes and model-specific fixes the model may not know. */
+export async function researchProblem(opts: {
+  apiKey: string;
+  lang: Lang;
+  region: string;
+  item?: { name: string; brand?: string; model?: string };
+  problem: string;
+}): Promise<AiResult<Research>> {
+  const language = opts.lang === "de" ? "German" : "English";
+  const what = opts.item ? [opts.item.name, opts.item.brand, opts.item.model].filter(Boolean).join(", ") : "(unknown item)";
+  const r = await withWebSearch(
+    opts.apiKey,
+    `Research this home-repair problem online before anyone tries to fix it.
+Item: ${what}
+Problem: ${opts.problem}
+${opts.region ? `Location: ${opts.region}` : ""}
+
+Find what the manufacturer and reliable repair sources say: the exact meaning of any error code for this brand/model, the usual causes and the recommended fix or reset procedure. Prefer the manufacturer's own pages and manuals.
+Then write a factual summary of at most 150 words in ${language}. Say clearly if sources disagree or if nothing specific to this model was found. No advice beyond what the sources say.`,
+    4,
+  );
+  return {
+    value: { summary: r.text.trim(), sources: r.sources.slice(0, 5) },
+    assistantTurn: { role: "assistant", content: toReplayable(r.res) },
+    model: r.model,
+    inputTokens: r.inputTokens,
+    outputTokens: r.outputTokens,
+    costUsd: r.costUsd,
+  };
+}
+
+/** Does the description mention an error code like "E011", "F 21", "Fehler 5", "error E:24"? */
+export function mentionsErrorCode(text: string): boolean {
+  text = text.replace(/\bE\s?(14|27|40)\b/gi, ""); // lamp sockets, not error codes
+  return /\b(?:[EFHCU]\s?:?-?\s?\d{1,3}|(?:fehlercode|errorcode|error|fehler|code|err)\s*[A-Z]?\s?:?-?\s?\d{1,4})\b/i.test(text);
+}
+
 /**
  * Search the web for the item's manual and return the best link, or null.
  * Uses Sonnet with Anthropic's web search tool (the cheap Haiku model can't search the web).
@@ -401,54 +491,26 @@ export async function findManualUrl(opts: {
   brand?: string;
   model?: string;
 }): Promise<AiResult<{ url: string; title: string } | null>> {
-  const model = MODELS.strong;
   const what = [opts.brand, opts.model].filter(Boolean).join(" ");
-  const messages: MessageParam[] = [
-    {
-      role: "user",
-      content: `Find the official user manual or installation instructions for this item: ${opts.name}, ${what}.
+  const r = await withWebSearch(
+    opts.apiKey,
+    `Find the official user manual or installation instructions for this item: ${opts.name}, ${what}.
 Prefer a PDF from the manufacturer's own website, ${opts.lang === "de" ? "in German if available" : "in English if available"}. Next best: a reputable manual site (e.g. manualslib). The model number must match.
 Only give a URL that appeared in your search results; never make one up.
 Finish your answer with exactly two lines:
 URL: <the link, or NONE>
 TITLE: <short description, e.g. "Bosch user manual (PDF, German)">`,
-    },
-  ];
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let searches = 0;
-  let res: Message | undefined;
-  // Server tools can pause a long turn; we then send the conversation back to let it continue.
-  for (let round = 0; round < 3; round++) {
-    res = await client(opts.apiKey).messages.create({
-      model,
-      max_tokens: 16000,
-      output_config: { effort: "low" },
-      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 3 }],
-      messages,
-    });
-    const u = usageOf(model, res);
-    inputTokens += u.inputTokens;
-    outputTokens += u.outputTokens;
-    searches += res.usage.server_tool_use?.web_search_requests ?? 0;
-    if (res.stop_reason !== "pause_turn") break;
-    messages.push({ role: "assistant", content: toReplayable(res) });
-  }
-  const cost = costUsd(model, inputTokens, outputTokens) + searches * 0.01; // $10 per 1,000 searches
-  if (!res || res.stop_reason === "refusal") throw new RefusalError("refusal");
-  const text = res.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("\n");
-  const url = text.match(/URL:\s*(https?:\/\/\S+)/i)?.[1]?.replace(/[)>.,]+$/, "");
-  const title = text.match(/TITLE:\s*(.+)/i)?.[1]?.trim() ?? "";
+    3,
+  );
+  const url = r.text.match(/URL:\s*(https?:\/\/\S+)/i)?.[1]?.replace(/[)>.,]+$/, "");
+  const title = r.text.match(/TITLE:\s*(.+)/i)?.[1]?.trim() ?? "";
   return {
     value: url ? { url, title } : null,
-    assistantTurn: { role: "assistant", content: toReplayable(res) },
-    model,
-    inputTokens,
-    outputTokens,
-    costUsd: cost,
+    assistantTurn: { role: "assistant", content: toReplayable(r.res) },
+    model: r.model,
+    inputTokens: r.inputTokens,
+    outputTokens: r.outputTokens,
+    costUsd: r.costUsd,
   };
 }
 

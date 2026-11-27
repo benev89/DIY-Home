@@ -3,13 +3,14 @@ import { useLiveQuery } from "dexie-react-hooks";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { db } from "../db";
 import { useI18n } from "../i18n";
-import { describeError, RefusalError } from "../ai";
+import { describeError, mentionsErrorCode, RefusalError } from "../ai";
 import { startRepair } from "../repairs";
 import { Header, PhotoPicker } from "../components/ui";
 import { DictationTextarea } from "../components/Dictation";
 import { useDraft } from "../persist";
 
-type FixDraft = { itemId?: number; problem: string; photoIds: number[]; includeManual: boolean };
+/** webResearch undefined = decide automatically (error code mentioned or model number known). */
+type FixDraft = { itemId?: number; problem: string; photoIds: number[]; includeManual: boolean; webResearch?: boolean };
 const EMPTY: FixDraft = { problem: "", photoIds: [], includeManual: true };
 
 export default function FixPage() {
@@ -29,21 +30,30 @@ export default function FixPage() {
     if (loaded && urlItem && urlItem !== itemId) setItemId(urlItem);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, urlItem]);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"research" | "diagnose" | false>(false);
   const [error, setError] = useState<string>();
 
   const apiKey = useLiveQuery(async () => (await db.settings.get("apiKey"))?.value as string | undefined, []);
   const areas = useLiveQuery(() => db.areas.orderBy("order").toArray(), []);
   const items = useLiveQuery(() => db.items.orderBy("name").toArray(), []);
   const item = items?.find((i) => i.id === itemId);
+  const autoResearch = mentionsErrorCode(problem) || !!item?.model;
+  const research = draft.webResearch ?? autoResearch;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!problem.trim()) return;
-    setBusy(true);
+    setBusy("diagnose");
     setError(undefined);
     try {
-      const id = await startRepair({ itemId, problem, photoIds, includeManual: includeManual && !!item?.manualFileId });
+      const id = await startRepair({
+        itemId,
+        problem,
+        photoIds,
+        includeManual: includeManual && !!item?.manualFileId,
+        research,
+        onStage: setBusy,
+      });
       clearDraft();
       navigate(`/repair/${id}`, { replace: true });
     } catch (err) {
@@ -96,9 +106,16 @@ export default function FixPage() {
             {t.includeManual}
           </label>
         )}
+        <label className="check">
+          <input type="checkbox" checked={research} onChange={(e) => setDraft((d) => ({ ...d, webResearch: e.target.checked }))} />
+          <span>
+            🔎 {t.webResearch}
+            <small className="muted">{t.webResearchHint}</small>
+          </span>
+        </label>
         {error && <div className="callout error">{error}</div>}
-        <button className="btn primary block" type="submit" disabled={busy || !apiKey}>
-          {busy ? <span className="spinner">{t.diagnosing}</span> : `🔧 ${t.diagnose}`}
+        <button className="btn primary block" type="submit" disabled={!!busy || !apiKey}>
+          {busy ? <span className="spinner">{busy === "research" ? t.researching : t.diagnosing}</span> : `🔧 ${t.diagnose}`}
         </button>
       </form>
     </>

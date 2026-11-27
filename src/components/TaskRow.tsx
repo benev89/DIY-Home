@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { db, markTaskDone, type Task } from "../db";
 import { useI18n } from "../i18n";
 import { bucket, dueLabel, INTERVAL_CHOICES, intervalLabel } from "../care";
+import { exportToCalendar } from "../calendar";
 
 /** One maintenance task: tap ✓ when done; tap the text for details. */
 export function TaskRow({ task, itemName }: { task: Task; itemName?: string }) {
@@ -50,6 +51,9 @@ export function TaskRow({ task, itemName }: { task: Task; itemName?: string }) {
               {t.lastDone}: {task.doneLog.slice(-3).reverse().map((d) => new Date(d).toLocaleDateString()).join(", ")}
             </small>
           )}
+          <button className="btn" onClick={() => exportToCalendar([{ ...task, itemName }], `${task.title}.ics`)}>
+            📅 {t.addToCalendar}
+          </button>
           <button
             className="link danger"
             onClick={() => {

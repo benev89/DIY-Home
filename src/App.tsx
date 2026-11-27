@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { HashRouter, NavLink, Route, Routes } from "react-router-dom";
+import { useEffect, useLayoutEffect, useState } from "react";
+import { HashRouter, NavLink, Route, Routes, useLocation, useNavigationType } from "react-router-dom";
 import { getSetting, seedIfEmpty, setSetting } from "./db";
 import { detectLang, I18nProvider, useI18n, type Lang } from "./i18n";
 import Home from "./pages/Home";
@@ -12,6 +12,26 @@ import RepairPage from "./pages/RepairPage";
 import HistoryPage from "./pages/HistoryPage";
 import SettingsPage from "./pages/SettingsPage";
 import CarePage from "./pages/CarePage";
+
+/** New screens open at the top; going back returns to where you were on that screen. */
+const scrollPositions = new Map<string, number>();
+function ScrollManager() {
+  const location = useLocation();
+  const navType = useNavigationType();
+  useLayoutEffect(() => {
+    const key = location.key;
+    window.scrollTo(0, navType === "POP" ? (scrollPositions.get(key) ?? 0) : 0);
+    // Restore again after content from the database has rendered.
+    const late = navType === "POP" ? setTimeout(() => window.scrollTo(0, scrollPositions.get(key) ?? 0), 120) : undefined;
+    const save = () => scrollPositions.set(key, window.scrollY);
+    window.addEventListener("scroll", save, { passive: true });
+    return () => {
+      clearTimeout(late);
+      window.removeEventListener("scroll", save);
+    };
+  }, [location.key, navType]);
+  return null;
+}
 
 function Nav() {
   const { t } = useI18n();
@@ -60,6 +80,7 @@ export default function App() {
   return (
     <I18nProvider lang={lang} setLang={setLang}>
       <HashRouter>
+        <ScrollManager />
         <main className="page">
           <Routes>
             <Route path="/" element={<Home />} />

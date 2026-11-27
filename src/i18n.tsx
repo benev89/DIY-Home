@@ -187,6 +187,18 @@ const en = {
   backupReminder: "Your last backup is over a month old. Tap to export one.",
   lastBackup: "Last backup",
   never: "never",
+  removeFromTools: "Remove from your tools?",
+  tapIfYouHave: "Tap if you have it",
+  needsHint: "Tap to mark what you have – it's synced with your Tools.",
+  webResearch: "Look it up online first",
+  webResearchHint: "Checks error codes and fixes for your exact model (about 3–5 cents). Recommended for error codes.",
+  researching: "Searching the web…",
+  researchFound: "Found online",
+  sources: "sources",
+  addToCalendar: "Add to calendar",
+  allToCalendar: "Add all to calendar (with reminders)",
+  careSuggestionsForItems: "Suggestions for your things",
+  loadingCareFor: "Getting ideas for {n} more things…",
 };
 
 export type Dict = typeof en;
@@ -375,6 +387,18 @@ const de: Dict = {
   backupReminder: "Deine letzte Sicherung ist über einen Monat alt. Tippen zum Exportieren.",
   lastBackup: "Letzte Sicherung",
   never: "noch nie",
+  removeFromTools: "Aus deinem Werkzeug entfernen?",
+  tapIfYouHave: "Antippen, wenn du es hast",
+  needsHint: "Antippen, was du hast – wird mit deinem Werkzeug abgeglichen.",
+  webResearch: "Erst im Internet nachsehen",
+  webResearchHint: "Prüft Fehlercodes und Lösungen für dein genaues Modell (ca. 3–5 Cent). Bei Fehlercodes empfohlen.",
+  researching: "Suche im Internet…",
+  researchFound: "Im Internet gefunden",
+  sources: "Quellen",
+  addToCalendar: "In den Kalender",
+  allToCalendar: "Alle in den Kalender (mit Erinnerung)",
+  careSuggestionsForItems: "Vorschläge für deine Dinge",
+  loadingCareFor: "Hole Ideen für {n} weitere Dinge…",
 };
 
 export const dictionaries: Record<Lang, Dict> = { en, de };

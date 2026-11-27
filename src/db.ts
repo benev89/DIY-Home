@@ -1,7 +1,7 @@
 // Local database (IndexedDB via Dexie). Everything lives on this device only.
 import Dexie, { type EntityTable } from "dexie";
 import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
-import type { Diagnosis } from "./ai";
+import type { Diagnosis, Research } from "./ai";
 
 export interface Area {
   id?: number;
@@ -87,6 +87,8 @@ export interface Repair {
   /** Readable view of the conversation for the UI. */
   chat: { role: "user" | "assistant"; text: string; model?: string; photoIds?: number[] }[];
   diagnosis?: Diagnosis;
+  /** What a web search found before the diagnosis (error codes, model-specific fixes). */
+  research?: Research;
   stepsDone: number[];
   status: RepairStatus;
   outcome?: string;

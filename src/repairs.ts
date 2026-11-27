@@ -7,6 +7,8 @@ import {
   diagnose,
   followUp,
   MODELS,
+  researchProblem,
+  type Research,
   type AiResult,
   type ModelId,
 } from "./ai";
@@ -75,12 +77,30 @@ export async function startRepair(input: {
   problem: string;
   photoIds: number[];
   includeManual: boolean;
+  /** Look the problem up on the web first (error codes, model-specific fixes). */
+  research?: boolean;
+  onStage?: (stage: "research" | "diagnose") => void;
 }): Promise<number> {
   const s = await aiSettings();
   const item = input.itemId ? await db.items.get(input.itemId) : undefined;
   const area = item ? await db.areas.get(item.areaId) : undefined;
   const past = item ? await db.repairs.where("itemId").equals(item.id!).toArray() : [];
   const tools = await db.tools.toArray();
+
+  let research: Research | undefined;
+  let researchCost = 0;
+  if (input.research) {
+    input.onStage?.("research");
+    const r = await researchProblem({
+      ...s,
+      item: item && { name: item.name, brand: item.brand, model: item.model },
+      problem: input.problem,
+    });
+    await recordUsage(r);
+    research = r.value;
+    researchCost = r.costUsd;
+  }
+  input.onStage?.("diagnose");
 
   const contextSnapshot = buildContext({
     item: item && {
@@ -101,6 +121,7 @@ export async function startRepair(input: {
     tools: tools.filter((t) => t.kind === "tool").map((t) => t.name + (t.notes ? ` (${t.notes})` : "")),
     supplies: tools.filter((t) => t.kind === "supply").map((t) => t.name + (t.notes ? ` (${t.notes})` : "")),
     problem: input.problem,
+    research: research && `${research.summary}\n${research.sources.map((x) => `- Source: ${x.title} (${x.url})`).join("\n")}`,
   });
 
   const now = Date.now();
@@ -111,6 +132,7 @@ export async function startRepair(input: {
     photoIds: input.photoIds,
     itemPhotoIds: (item?.photoIds ?? []).slice(0, MAX_ITEM_PHOTOS),
     includeManual: input.includeManual,
+    research,
     contextSnapshot,
     history: [],
     chat: [],
@@ -126,7 +148,7 @@ export async function startRepair(input: {
   repair.diagnosis = res.value;
   repair.title = res.value.title;
   repair.history = [res.assistantTurn];
-  repair.costUsd = res.costUsd;
+  repair.costUsd = researchCost + res.costUsd;
   return (await db.repairs.add(repair)) as number;
 }
 
