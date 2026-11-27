@@ -5,7 +5,8 @@ import { db, type RepairStatus } from "../db";
 import { useI18n } from "../i18n";
 import { describeError, MODELS, RefusalError } from "../ai";
 import { askFollowUp, thinkHarder } from "../repairs";
-import { formatUsd, Header, Thumb } from "../components/ui";
+import { formatUsd, Header, PhotoPicker, Thumb } from "../components/ui";
+import { DictationTextarea } from "../components/Dictation";
 
 const STATUSES: RepairStatus[] = ["open", "fixed", "not_fixed", "pro"];
 
@@ -15,6 +16,7 @@ export default function RepairPage() {
   const repair = useLiveQuery(() => db.repairs.get(id), [id]);
   const item = useLiveQuery(() => (repair?.itemId ? db.items.get(repair.itemId) : undefined), [repair?.itemId]);
   const [question, setQuestion] = useState("");
+  const [questionPhotos, setQuestionPhotos] = useState<number[]>([]);
   const [strong, setStrong] = useState(false);
   const [busy, setBusy] = useState<"followup" | "harder" | null>(null);
   const [error, setError] = useState<string>();
@@ -47,8 +49,9 @@ export default function RepairPage() {
     const q = question.trim();
     if (!q) return;
     void run("followup", async () => {
-      await askFollowUp(id, q, strong ? MODELS.strong : MODELS.fast);
+      await askFollowUp(id, q, strong ? MODELS.strong : MODELS.fast, questionPhotos);
       setQuestion("");
+      setQuestionPhotos([]);
     });
   };
 
@@ -194,6 +197,17 @@ export default function RepairPage() {
             </div>
           )}
 
+          {!!d.prevention?.length && (
+            <section className={`prevention ${repair.status === "fixed" ? "highlight" : ""}`}>
+              <h2>🛡️ {t.prevention}</h2>
+              <ul>
+                {d.prevention.map((p, i) => (
+                  <li key={i}>{p}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+
           <button className="btn block" disabled={!!busy} onClick={() => run("harder", () => thinkHarder(id))}>
             {busy === "harder" ? <span className="spinner">{t.diagnosing}</span> : `🧠 ${t.thinkHarder}`}
           </button>
@@ -206,13 +220,21 @@ export default function RepairPage() {
         <div className="chat">
           {repair.chat.map((m, i) => (
             <div key={i} className={`bubble ${m.role}`}>
+              {!!m.photoIds?.length && (
+                <div className="photos">
+                  {m.photoIds.map((p) => (
+                    <Thumb key={p} id={p} />
+                  ))}
+                </div>
+              )}
               <span className="pre">{m.text}</span>
               {m.model === MODELS.strong && <small className="muted"> 🧠</small>}
             </div>
           ))}
         </div>
         <form onSubmit={send} className="form">
-          <textarea rows={3} value={question} onChange={(e) => setQuestion(e.target.value)} placeholder={t.followUpPlaceholder} />
+          <DictationTextarea rows={3} value={question} onChange={setQuestion} placeholder={t.followUpPlaceholder} />
+          <PhotoPicker ids={questionPhotos} onChange={setQuestionPhotos} />
           <label className="check">
             <input type="checkbox" checked={strong} onChange={(e) => setStrong(e.target.checked)} />
             🧠 {t.thinkHarder}
@@ -236,11 +258,11 @@ export default function RepairPage() {
         </div>
         <label className="form">
           {t.outcome}
-          <textarea
+          <DictationTextarea
             rows={2}
             value={outcome}
             placeholder={t.outcomePlaceholder}
-            onChange={(e) => setOutcome(e.target.value)}
+            onChange={setOutcome}
             onBlur={() => db.repairs.update(id, { outcome: outcome.trim() || undefined, updatedAt: Date.now() })}
           />
         </label>

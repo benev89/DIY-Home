@@ -1,8 +1,22 @@
 // The repair workflow: start a repair, ask follow-ups, "think harder".
-import type { MessageParam } from "@anthropic-ai/sdk/resources/messages";
-import { buildContext, buildFirstMessage, diagnose, followUp, MODELS, type AiResult, type ModelId } from "./ai";
+import type { ContentBlockParam, MessageParam } from "@anthropic-ai/sdk/resources/messages";
+import {
+  blobToBase64,
+  buildContext,
+  buildFirstMessage,
+  diagnose,
+  followUp,
+  MODELS,
+  type AiResult,
+  type ModelId,
+} from "./ai";
 import { db, getSetting, type Repair } from "./db";
 import type { Lang } from "./i18n";
+
+// Photos in follow-up questions are saved as a reference ("file:12") instead of the image
+// data itself, so the database stays small. hydrate() swaps in the real image before sending.
+const FILE_REF = "file:";
+const MAX_ITEM_PHOTOS = 3;
 
 async function aiSettings() {
   return {
@@ -22,14 +36,37 @@ async function recordUsage(r: AiResult<unknown>) {
   });
 }
 
+async function blobs(ids: number[]): Promise<Blob[]> {
+  return (await db.files.bulkGet(ids)).filter((f) => !!f).map((f) => f!.blob);
+}
+
 async function firstMessage(repair: Repair): Promise<MessageParam> {
-  const photos = (await db.files.bulkGet(repair.photoIds)).filter((f) => !!f).map((f) => f!.blob);
   let manual: Blob | undefined;
   if (repair.includeManual && repair.itemId) {
     const item = await db.items.get(repair.itemId);
     if (item?.manualFileId) manual = (await db.files.get(item.manualFileId))?.blob;
   }
-  return buildFirstMessage(repair.contextSnapshot, photos, manual);
+  const itemPhotos = repair.itemPhotoIds === undefined ? undefined : await blobs(repair.itemPhotoIds);
+  return buildFirstMessage(repair.contextSnapshot, await blobs(repair.photoIds), manual, itemPhotos);
+}
+
+export async function hydrate(messages: MessageParam[]): Promise<MessageParam[]> {
+  return Promise.all(
+    messages.map(async (m) => {
+      if (typeof m.content === "string") return m;
+      const content = await Promise.all(
+        m.content.map(async (b): Promise<ContentBlockParam> => {
+          if (b.type === "image" && b.source.type === "base64" && b.source.data.startsWith(FILE_REF)) {
+            const file = await db.files.get(Number(b.source.data.slice(FILE_REF.length)));
+            if (!file) return { type: "text", text: "[photo was deleted]" };
+            return { ...b, source: { ...b.source, data: await blobToBase64(file.blob) } };
+          }
+          return b;
+        }),
+      );
+      return { ...m, content } as MessageParam;
+    }),
+  );
 }
 
 /** Create a repair from the form, ask the AI for a diagnosis, save everything. Returns the repair id. */
@@ -72,6 +109,7 @@ export async function startRepair(input: {
     title: input.problem.slice(0, 60),
     problem: input.problem,
     photoIds: input.photoIds,
+    itemPhotoIds: (item?.photoIds ?? []).slice(0, MAX_ITEM_PHOTOS),
     includeManual: input.includeManual,
     contextSnapshot,
     history: [],
@@ -92,15 +130,34 @@ export async function startRepair(input: {
   return (await db.repairs.add(repair)) as number;
 }
 
-export async function askFollowUp(repairId: number, question: string, model: ModelId = MODELS.fast): Promise<void> {
+export async function askFollowUp(
+  repairId: number,
+  question: string,
+  model: ModelId = MODELS.fast,
+  photoIds: number[] = [],
+): Promise<void> {
   const s = await aiSettings();
   const repair = (await db.repairs.get(repairId))!;
-  const userTurn: MessageParam = { role: "user", content: question };
-  const res = await followUp({ ...s, model, messages: [await firstMessage(repair), ...repair.history, userTurn] });
+  const userTurn: MessageParam = photoIds.length
+    ? {
+        role: "user",
+        content: [
+          ...photoIds.map(
+            (id): ContentBlockParam => ({
+              type: "image",
+              source: { type: "base64", media_type: "image/jpeg", data: `${FILE_REF}${id}` },
+            }),
+          ),
+          { type: "text", text: question },
+        ],
+      }
+    : { role: "user", content: question };
+  const messages = [await firstMessage(repair), ...(await hydrate([...repair.history, userTurn]))];
+  const res = await followUp({ ...s, model, messages });
   await recordUsage(res);
   await db.repairs.update(repairId, {
     history: [...repair.history, userTurn, res.assistantTurn],
-    chat: [...repair.chat, { role: "user", text: question }, { role: "assistant", text: res.value, model }],
+    chat: [...repair.chat, { role: "user", text: question, photoIds }, { role: "assistant", text: res.value, model }],
     costUsd: repair.costUsd + res.costUsd,
     updatedAt: Date.now(),
   });
@@ -112,13 +169,13 @@ export async function thinkHarder(repairId: number): Promise<void> {
   const repair = (await db.repairs.get(repairId))!;
   const prompt =
     s.lang === "de"
-      ? "Bitte analysiere das Problem noch einmal gründlich, mit allem, was oben steht, und gib einen neuen, vollständigen Plan."
-      : "Please re-analyse this problem thoroughly, using everything above, and give a new complete plan.";
+      ? "Bitte analysiere das Problem noch einmal gründlich, mit allem, was oben steht (auch allen Fotos), und gib einen neuen, vollständigen Plan."
+      : "Please re-analyse this problem thoroughly, using everything above (including all photos), and give a new complete plan.";
   const userTurn: MessageParam = { role: "user", content: prompt };
   const res = await diagnose({
     ...s,
     model: MODELS.strong,
-    messages: [await firstMessage(repair), ...repair.history, userTurn],
+    messages: [await firstMessage(repair), ...(await hydrate([...repair.history, userTurn]))],
   });
   await recordUsage(res);
   await db.repairs.update(repairId, {

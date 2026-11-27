@@ -29,6 +29,8 @@ export interface Item {
 
 export interface Tool {
   id?: number;
+  /** Id of the suggestion in toolCatalog.ts, if picked from the suggestions. */
+  key?: string;
   name: string;
   kind: "tool" | "supply";
   notes?: string;
@@ -50,13 +52,15 @@ export interface Repair {
   title: string;
   problem: string;
   photoIds: number[];
+  /** Item photos sent with the first message (snapshot). Undefined for repairs from v0.1. */
+  itemPhotoIds?: number[];
   includeManual: boolean;
   /** Exact text of the first message sent to the AI, frozen so follow-ups replay the same history. */
   contextSnapshot: string;
   /** Everything after the first user message: assistant replies (raw content blocks) and follow-up questions. */
   history: MessageParam[];
   /** Readable view of the conversation for the UI. */
-  chat: { role: "user" | "assistant"; text: string; model?: string }[];
+  chat: { role: "user" | "assistant"; text: string; model?: string; photoIds?: number[] }[];
   diagnosis?: Diagnosis;
   stepsDone: number[];
   status: RepairStatus;
