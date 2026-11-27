@@ -12,12 +12,14 @@ export default function SettingsPage() {
   const [region, setRegion] = useState("");
   const [keyStatus, setKeyStatus] = useState<string>();
   const [persisted, setPersisted] = useState<boolean>();
+  const [lastBackup, setLastBackup] = useState<number>();
   const importInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     getSetting("apiKey", "").then(setApiKey);
     getSetting("region", "").then(setRegion);
     navigator.storage?.persisted?.().then(setPersisted);
+    getSetting<number | undefined>("lastBackup", undefined).then(setLastBackup);
   }, []);
 
   const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime();
@@ -36,6 +38,8 @@ export default function SettingsPage() {
 
   const doExport = async () => {
     downloadText(await exportAll(), `diy-home-backup-${new Date().toISOString().slice(0, 10)}.json`);
+    await setSetting("lastBackup", Date.now());
+    setLastBackup(Date.now());
   };
   const doImport = async (f?: File) => {
     if (!f || !confirm(t.importConfirm)) return;
@@ -94,6 +98,9 @@ export default function SettingsPage() {
       <section>
         <h2>{t.backup}</h2>
         <p className="muted">{t.backupHint}</p>
+        <p className="small">
+          {t.lastBackup}: <strong>{lastBackup ? new Date(lastBackup).toLocaleDateString() : t.never}</strong>
+        </p>
         <div className="row-wrap">
           <button className="btn primary" onClick={doExport}>
             ⬇️ {t.exportBackup}

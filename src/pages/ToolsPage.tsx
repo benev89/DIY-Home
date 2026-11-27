@@ -67,7 +67,8 @@ export default function ToolsPage() {
           <div className="chip-grid">
             {own.map((tool) => (
               <button key={tool.id} className="pick on" onClick={() => db.tools.where("id").equals(tool.id!).delete()}>
-                {tool.name} ×
+                <span className="pick-mark">×</span>
+                {tool.name}
               </button>
             ))}
           </div>
@@ -85,8 +86,10 @@ export default function ToolsPage() {
               {g.entries.map((e) => {
                 const on = tools.some((tool) => matches(tool, e));
                 return (
+                  // The mark always takes the same space (＋ or ✓), so selecting never changes
+                  // the chip's width and nothing jumps to another row.
                   <button key={e.key} className={`pick ${on ? "on" : ""}`} aria-pressed={on} onClick={() => toggle(e)}>
-                    {on ? "✓ " : ""}
+                    <span className="pick-mark">{on ? "✓" : "＋"}</span>
                     {e[lang]}
                   </button>
                 );

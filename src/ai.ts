@@ -80,9 +80,22 @@ export const DiagnosisSchema = z.object({
   minutes: z.number().describe("Estimated working time in minutes"),
   stop_and_call_pro_if: z.string().describe("The specific signs that mean: stop and call a professional"),
   prevention: z
-    .array(z.string())
-    .describe("How to keep this from happening again: concrete habits or maintenance, with intervals (e.g. 'Descale every 3 months')"),
+    .array(
+      z.object({
+        tip: z.string().describe("Concrete habit or maintenance step, e.g. 'Descale the aerator'"),
+        interval_days: z
+          .number()
+          .describe("If this should be repeated: how often, in days (e.g. 90). 0 for a one-off or a habit"),
+      }),
+    )
+    .describe("How to keep this from happening again"),
 });
+/** Repairs saved before v0.3 have prevention as plain strings. */
+export type PreventionTip = { tip: string; interval_days: number };
+export function preventionTips(d: { prevention?: unknown }): PreventionTip[] {
+  if (!Array.isArray(d.prevention)) return [];
+  return d.prevention.map((p) => (typeof p === "string" ? { tip: p, interval_days: 0 } : (p as PreventionTip)));
+}
 export type Diagnosis = z.infer<typeof DiagnosisSchema>;
 
 export function systemPrompt(lang: Lang, region: string): string {
@@ -335,6 +348,108 @@ export async function identifyItem(opts: {
   if (res.stop_reason === "refusal") throw new RefusalError("refusal");
   if (!res.parsed_output) throw new Error("The AI returned an answer the app couldn't read. Try again.");
   return { value: res.parsed_output, assistantTurn: { role: "assistant", content: toReplayable(res) }, model, ...usageOf(model, res) };
+}
+
+export const CareSchema = z.object({
+  tasks: z.array(
+    z.object({
+      title: z.string().describe("Short imperative, e.g. 'Descale', 'Clean the filter', 'Oil the tabletop'"),
+      how: z.string().describe("2-4 short sentences: how to do it, with what (household products, amounts)"),
+      interval_days: z.number().describe("How often, in days, for normal household use"),
+    }),
+  ),
+});
+
+/** Suggest a maintenance plan for one item (descaling, cleaning filters, oiling wood…). */
+export async function suggestCare(opts: {
+  apiKey: string;
+  lang: Lang;
+  region: string;
+  itemText: string;
+  photos: Blob[];
+}): Promise<AiResult<z.infer<typeof CareSchema>>> {
+  const language = opts.lang === "de" ? "German" : "English";
+  const content: ContentBlockParam[] = [];
+  for (const p of opts.photos) content.push(await imageBlock(p));
+  content.push({
+    type: "text",
+    text: `${opts.itemText}
+
+Suggest the regular maintenance and care this item needs in a normal household (2-6 tasks, most important first). Use the manufacturer's usual recommendations when you know the model; otherwise typical ones for this kind of item and material. Only tasks a non-professional can do safely. ${opts.region ? `The user lives in ${opts.region}.` : ""} Write in ${language}.`,
+  });
+  const model = MODELS.fast;
+  const res = await client(opts.apiKey).messages.parse({
+    model,
+    max_tokens: 16000,
+    output_config: { effort: "medium", format: zodOutputFormat(CareSchema) },
+    messages: [{ role: "user", content }],
+  });
+  if (res.stop_reason === "refusal") throw new RefusalError("refusal");
+  if (!res.parsed_output) throw new Error("The AI returned an answer the app couldn't read. Try again.");
+  return { value: res.parsed_output, assistantTurn: { role: "assistant", content: toReplayable(res) }, model, ...usageOf(model, res) };
+}
+
+/**
+ * Search the web for the item's manual and return the best link, or null.
+ * Uses Sonnet with Anthropic's web search tool (the cheap Haiku model can't search the web).
+ * Costs roughly 2-5 cents, once per item.
+ */
+export async function findManualUrl(opts: {
+  apiKey: string;
+  lang: Lang;
+  name: string;
+  brand?: string;
+  model?: string;
+}): Promise<AiResult<{ url: string; title: string } | null>> {
+  const model = MODELS.strong;
+  const what = [opts.brand, opts.model].filter(Boolean).join(" ");
+  const messages: MessageParam[] = [
+    {
+      role: "user",
+      content: `Find the official user manual or installation instructions for this item: ${opts.name}, ${what}.
+Prefer a PDF from the manufacturer's own website, ${opts.lang === "de" ? "in German if available" : "in English if available"}. Next best: a reputable manual site (e.g. manualslib). The model number must match.
+Only give a URL that appeared in your search results; never make one up.
+Finish your answer with exactly two lines:
+URL: <the link, or NONE>
+TITLE: <short description, e.g. "Bosch user manual (PDF, German)">`,
+    },
+  ];
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let searches = 0;
+  let res: Message | undefined;
+  // Server tools can pause a long turn; we then send the conversation back to let it continue.
+  for (let round = 0; round < 3; round++) {
+    res = await client(opts.apiKey).messages.create({
+      model,
+      max_tokens: 16000,
+      output_config: { effort: "low" },
+      tools: [{ type: "web_search_20260209", name: "web_search", max_uses: 3 }],
+      messages,
+    });
+    const u = usageOf(model, res);
+    inputTokens += u.inputTokens;
+    outputTokens += u.outputTokens;
+    searches += res.usage.server_tool_use?.web_search_requests ?? 0;
+    if (res.stop_reason !== "pause_turn") break;
+    messages.push({ role: "assistant", content: toReplayable(res) });
+  }
+  const cost = costUsd(model, inputTokens, outputTokens) + searches * 0.01; // $10 per 1,000 searches
+  if (!res || res.stop_reason === "refusal") throw new RefusalError("refusal");
+  const text = res.content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+  const url = text.match(/URL:\s*(https?:\/\/\S+)/i)?.[1]?.replace(/[)>.,]+$/, "");
+  const title = text.match(/TITLE:\s*(.+)/i)?.[1]?.trim() ?? "";
+  return {
+    value: url ? { url, title } : null,
+    assistantTurn: { role: "assistant", content: toReplayable(res) },
+    model,
+    inputTokens,
+    outputTokens,
+    costUsd: cost,
+  };
 }
 
 /** Cheapest possible call, to check that a key works. */

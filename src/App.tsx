@@ -11,15 +11,16 @@ import FixPage from "./pages/FixPage";
 import RepairPage from "./pages/RepairPage";
 import HistoryPage from "./pages/HistoryPage";
 import SettingsPage from "./pages/SettingsPage";
+import CarePage from "./pages/CarePage";
 
 function Nav() {
   const { t } = useI18n();
   const links: [string, string, string][] = [
     ["/", "🏠", t.navHome],
     ["/fix", "🔧", t.navFix],
+    ["/care", "🗓", t.navCare],
     ["/tools", "🧰", t.navTools],
     ["/history", "📋", t.navHistory],
-    ["/settings", "⚙️", t.navSettings],
   ];
   return (
     <nav className="tabbar">
@@ -71,6 +72,7 @@ export default function App() {
             <Route path="/repair/:id" element={<RepairPage />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/care" element={<CarePage />} />
           </Routes>
         </main>
         <Nav />

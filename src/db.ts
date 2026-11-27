@@ -22,10 +22,35 @@ export interface Item {
   notes?: string;
   manualUrl?: string;
   manualFileId?: number; // a PDF stored in `files`
+  /** When the AI last searched the web for the manual (so it doesn't search again and again). */
+  manualSearchedAt?: number;
+  /** Maintenance ideas from the AI, shown as tap-to-add suggestions. */
+  careSuggestions?: CareSuggestion[];
   photoIds: number[];
   createdAt: number;
   updatedAt: number;
 }
+
+export interface CareSuggestion {
+  title: string;
+  how: string;
+  intervalDays: number;
+}
+
+/** A recurring maintenance job, e.g. "Descale the kettle every 90 days". */
+export interface Task {
+  id?: number;
+  itemId?: number;
+  title: string;
+  how?: string;
+  intervalDays: number;
+  nextDue: number;
+  lastDone?: number;
+  doneLog: number[];
+  createdAt: number;
+}
+
+export const DAY = 24 * 60 * 60 * 1000;
 
 export interface Tool {
   id?: number;
@@ -92,6 +117,7 @@ export const db = new Dexie("diy-home") as Dexie & {
   repairs: EntityTable<Repair, "id">;
   settings: EntityTable<Setting, "key">;
   usage: EntityTable<UsageEntry, "id">;
+  tasks: EntityTable<Task, "id">;
 };
 
 db.version(1).stores({
@@ -102,6 +128,10 @@ db.version(1).stores({
   repairs: "++id, itemId, status, createdAt",
   settings: "key",
   usage: "++id, at",
+});
+// v2: maintenance tasks. Dexie upgrades existing databases automatically; nothing is lost.
+db.version(2).stores({
+  tasks: "++id, itemId, nextDue",
 });
 
 export async function getSetting<T>(key: string, fallback: T): Promise<T> {
@@ -117,15 +147,38 @@ export async function saveFile(blob: Blob, name: string): Promise<number> {
   return (await db.files.add({ blob, name, type: blob.type, createdAt: Date.now() })) as number;
 }
 
-/** Delete an item together with its photos and manual. Repairs are kept (history), just unlinked. */
+/** Delete an item with its photos, manual and maintenance tasks. Repairs are kept (history), just unlinked. */
 export async function deleteItem(id: number): Promise<void> {
-  await db.transaction("rw", db.items, db.files, db.repairs, async () => {
+  await db.transaction("rw", [db.items, db.files, db.repairs, db.tasks], async () => {
     const item = await db.items.get(id);
     if (!item) return;
     await db.files.bulkDelete([...item.photoIds, ...(item.manualFileId ? [item.manualFileId] : [])]);
     await db.repairs.where("itemId").equals(id).modify({ itemId: undefined });
+    await db.tasks.where("itemId").equals(id).delete();
     await db.items.delete(id);
   });
+}
+
+/** Delete a repair and the photos that belong only to it (not the item's photos). */
+export async function deleteRepair(id: number): Promise<void> {
+  await db.transaction("rw", db.repairs, db.files, async () => {
+    const r = await db.repairs.get(id);
+    if (!r) return;
+    await db.files.bulkDelete([...r.photoIds, ...r.chat.flatMap((m) => m.photoIds ?? [])]);
+    await db.repairs.delete(id);
+  });
+}
+
+export async function addTask(t: { itemId?: number; title: string; how?: string; intervalDays: number }): Promise<number> {
+  const now = Date.now();
+  return (await db.tasks.add({ ...t, nextDue: now + t.intervalDays * DAY, doneLog: [], createdAt: now })) as number;
+}
+
+export async function markTaskDone(id: number): Promise<void> {
+  const t = await db.tasks.get(id);
+  if (!t) return;
+  const now = Date.now();
+  await db.tasks.update(id, { lastDone: now, nextDue: now + t.intervalDays * DAY, doneLog: [...t.doneLog, now] });
 }
 
 export const DEFAULT_AREAS: Record<"en" | "de", [string, string][]> = {
