@@ -53,10 +53,17 @@ small { display: block; }
 .page {
   max-width: 680px;
   margin: 0 auto;
-  padding: calc(env(safe-area-inset-top) + 12px) 16px calc(env(safe-area-inset-bottom) + 96px);
+  padding: 0 16px calc(env(safe-area-inset-bottom) + 96px);
 }
 
-.header { display: flex; align-items: center; gap: 8px; min-height: 48px; margin-bottom: 8px; }
+/* The header (with the back button) stays at the top while you scroll. */
+.header {
+  display: flex; align-items: center; gap: 8px; min-height: 56px;
+  position: sticky; top: 0; z-index: 5; background: var(--bg);
+  margin: 0 -16px 8px; padding: calc(env(safe-area-inset-top) + 8px) 16px 6px;
+  border-bottom: 1px solid transparent;
+}
+.header h1 { font-size: 1.3rem; white-space: nowrap; }
 .icon-btn {
   border: 0; background: transparent; color: var(--text); font-size: 1.5rem;
   min-width: 44px; min-height: 44px; border-radius: 10px; cursor: pointer;
@@ -172,10 +179,20 @@ textarea { resize: vertical; }
 .causes { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .causes li { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
 .causes small { color: var(--muted); margin-top: 4px; }
-.needs { list-style: none; padding: 0; }
-.needs .have { color: var(--ok); }
-.needs .missing { color: var(--err); }
-.needs small { display: inline; color: var(--muted); }
+.needs { list-style: none; padding: 0; display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.need {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 12px; text-align: left;
+  border-radius: 12px; border: 1px solid var(--border); background: var(--card); color: var(--text); font: inherit; cursor: pointer;
+}
+.need small { font-size: 0.8rem; }
+.need.have { border-color: var(--ok); background: var(--ok-soft); }
+.need.have small:last-child { color: var(--ok); }
+.need.missing small:last-child { color: var(--muted); }
+.need-mark {
+  width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  border: 2px solid var(--border); font-weight: 700;
+}
+.need.have .need-mark { background: var(--ok); border-color: var(--ok); color: #fff; }
 
 .steps { list-style: none; padding: 0; counter-reset: step; display: flex; flex-direction: column; gap: 8px; }
 .steps li { background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
@@ -272,3 +289,10 @@ small.inline { display: inline; font-weight: 400; }
 .small-pick { min-height: 36px; font-size: 0.82rem; padding-top: 4px; padding-bottom: 4px; }
 .ok-text { color: var(--ok); margin: 4px 0; }
 .block-link { display: block; text-decoration: none; color: var(--text); }
+
+/* Web research */
+.research { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin: 8px 0; }
+.research summary { cursor: pointer; font-weight: 600; }
+.research li { margin: 4px 0; word-break: break-word; }
+.sugg-group { margin: 10px 0 14px; display: flex; flex-direction: column; gap: 6px; }
+.check span small { display: block; }

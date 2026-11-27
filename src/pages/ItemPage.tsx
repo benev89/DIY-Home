@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Link, useParams } from "react-router-dom";
-import { addTask, db, getSetting, type Item } from "../db";
-import { useI18n, type Lang } from "../i18n";
-import { buildContext, describeError, suggestCare } from "../ai";
+import { addTask, db, type Item } from "../db";
+import { useI18n } from "../i18n";
+import { describeError } from "../ai";
+import { loadCareSuggestions } from "../careAi";
 import { autoFindManual } from "../manual";
 import { intervalLabel } from "../care";
 import { TaskRow } from "../components/TaskRow";
@@ -28,26 +29,7 @@ export default function ItemPage() {
     setCareBusy(true);
     setCareError(undefined);
     try {
-      const area = await db.areas.get(it.areaId);
-      const itemText = buildContext({
-        item: { name: it.name, area: area?.name, brand: it.brand, model: it.model, purchased: it.purchased, specs: it.specs, notes: it.notes },
-        pastRepairs: [],
-        tools: [],
-        supplies: [],
-        problem: "(none – this is about regular maintenance)",
-      });
-      const photo = it.photoIds[0] ? (await db.files.get(it.photoIds[0]))?.blob : undefined;
-      const res = await suggestCare({
-        apiKey: apiKey!,
-        lang: await getSetting<Lang>("lang", "en"),
-        region: await getSetting("region", ""),
-        itemText,
-        photos: photo ? [photo] : [],
-      });
-      await db.usage.add({ at: Date.now(), model: res.model, inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd });
-      await db.items.update(it.id!, {
-        careSuggestions: res.value.tasks.map((x) => ({ title: x.title, how: x.how, intervalDays: Math.max(1, Math.round(x.interval_days)) })),
-      });
+      await loadCareSuggestions(it.id!, true);
     } catch (e) {
       setCareError(`${t.errorPrefix} ${describeError(e)}`);
     } finally {

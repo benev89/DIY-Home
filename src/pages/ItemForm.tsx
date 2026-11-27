@@ -5,6 +5,7 @@ import { db, deleteItem, getSetting, saveFile, type Item } from "../db";
 import { useI18n, type Lang } from "../i18n";
 import { describeError, identifyItem, RefusalError } from "../ai";
 import { autoFindManual } from "../manual";
+import { loadCareSuggestions } from "../careAi";
 import { Header, PhotoPicker } from "../components/ui";
 import { DictationTextarea } from "../components/Dictation";
 
@@ -142,6 +143,7 @@ export default function ItemForm() {
       if (id && item && (item.brand || item.model) && !item.manualUrl && !item.manualFileId && !item.manualSearchedAt) {
         void searchManual(id);
       }
+      if (id) void loadCareSuggestions(id).catch(() => {}); // maintenance ideas, ready when you open the item
     } catch (err) {
       setReadError(err instanceof RefusalError ? t.refused : `${t.errorPrefix} ${describeError(err)}`);
     } finally {
