@@ -8,6 +8,7 @@ import { startRepair } from "../repairs";
 import { Header, PhotoPicker } from "../components/ui";
 import { DictationTextarea } from "../components/Dictation";
 import { useDraft } from "../persist";
+import { formatDate, underWarranty } from "../warranty";
 
 /** webResearch undefined = decide automatically (error code mentioned or model number known). */
 type FixDraft = { itemId?: number; problem: string; photoIds: number[]; includeManual: boolean; webResearch?: boolean };
@@ -37,7 +38,8 @@ export default function FixPage() {
   const areas = useLiveQuery(() => db.areas.orderBy("order").toArray(), []);
   const items = useLiveQuery(() => db.items.orderBy("name").toArray(), []);
   const item = items?.find((i) => i.id === itemId);
-  const autoResearch = mentionsErrorCode(problem) || !!item?.model;
+  // Only look things up automatically for error codes: that's where the AI's memory is unreliable.
+  const autoResearch = mentionsErrorCode(problem);
   const research = draft.webResearch ?? autoResearch;
 
   const submit = async (e: React.FormEvent) => {
@@ -72,6 +74,15 @@ export default function FixPage() {
           {t.needKey} <Link to="/settings">{t.goSettings} ›</Link>
         </div>
       ) : null}
+      {underWarranty(item) && (
+        <div className="callout warn">
+          🛡 <strong>
+            {t.warrantyValidUntil} {formatDate(item!.warrantyUntil!)}
+          </strong>
+          <br />
+          {t.warrantyWarning} {item!.receiptPhotoIds?.length ? t.receiptSaved : t.receiptMissing}
+        </div>
+      )}
       <form onSubmit={submit} className="form">
         <label>
           {t.whatItem}

@@ -7,12 +7,17 @@ import {
   diagnose,
   followUp,
   MODELS,
+  errorCodes,
   researchProblem,
   type Research,
   type AiResult,
   type ModelId,
 } from "./ai";
-import { db, getSetting, type Repair } from "./db";
+import { db, getSetting, setSetting, type Repair } from "./db";
+import { norm } from "./toolMatch";
+import { underWarranty } from "./warranty";
+
+const RESEARCH_CACHE_MS = 180 * 24 * 60 * 60 * 1000;
 import type { Lang } from "./i18n";
 
 // Photos in follow-up questions are saved as a reference ("file:12") instead of the image
@@ -91,14 +96,23 @@ export async function startRepair(input: {
   let researchCost = 0;
   if (input.research) {
     input.onStage?.("research");
-    const r = await researchProblem({
-      ...s,
-      item: item && { name: item.name, brand: item.brand, model: item.model },
-      problem: input.problem,
-    });
-    await recordUsage(r);
-    research = r.value;
-    researchCost = r.costUsd;
+    // Same model + same error code = same answer: reuse an earlier lookup for free.
+    const codes = errorCodes(input.problem);
+    const cacheKey = item?.model && codes.length ? `research:${norm(`${item.brand ?? ""} ${item.model}`)}|${codes.join(",")}|${s.lang}` : undefined;
+    const cached = cacheKey ? await getSetting<{ value: Research; at: number } | null>(cacheKey, null) : null;
+    if (cached && Date.now() - cached.at < RESEARCH_CACHE_MS) {
+      research = cached.value;
+    } else {
+      const r = await researchProblem({
+        ...s,
+        item: item && { name: item.name, brand: item.brand, model: item.model },
+        problem: input.problem,
+      });
+      await recordUsage(r);
+      research = r.value;
+      researchCost = r.costUsd;
+      if (cacheKey) await setSetting(cacheKey, { value: research, at: Date.now() });
+    }
   }
   input.onStage?.("diagnose");
 
@@ -111,6 +125,8 @@ export async function startRepair(input: {
       purchased: item.purchased,
       specs: item.specs,
       notes: item.notes,
+      warrantyUntil: item.warrantyUntil,
+      underWarranty: underWarranty(item),
     },
     pastRepairs: past.map((r) => ({
       title: r.title,

@@ -8,6 +8,7 @@ import { loadCareSuggestions } from "../careAi";
 import { autoFindManual } from "../manual";
 import { intervalLabel } from "../care";
 import { TaskRow } from "../components/TaskRow";
+import { formatDate, underWarranty } from "../warranty";
 import { Header, StatusBadge, Thumb, useFileUrl } from "../components/ui";
 import { manualSearchUrl } from "./ItemForm";
 
@@ -74,6 +75,12 @@ export default function ItemPage() {
             <Thumb key={p} id={p} />
           ))}
         </div>
+      )}
+      {item.warrantyUntil && (
+        <p className={`warranty-badge ${underWarranty(item) ? "valid" : "expired"}`}>
+          🛡 {underWarranty(item) ? t.warrantyValidUntil : t.warrantyExpired} {formatDate(item.warrantyUntil)}
+          {underWarranty(item) && !item.receiptPhotoIds?.length && <small> · {t.receiptMissing}</small>}
+        </p>
       )}
       <Link to={`/fix?item=${id}`} className="btn primary block">
         🔧 {t.fixThis}

@@ -4,6 +4,7 @@ import { db, type Tool } from "../db";
 import { useI18n } from "../i18n";
 import { Header } from "../components/ui";
 import { CATALOG, orderedGroups, type CatalogEntry } from "../toolCatalog";
+import { bestCatalogEntry } from "../toolMatch";
 
 const FIRST_GROUPS = 3;
 const MORE_GROUPS = 2;
@@ -25,6 +26,18 @@ export default function ToolsPage() {
   const sentinel = useRef<HTMLDivElement>(null);
   const [custom, setCustom] = useState("");
   const [customKind, setCustomKind] = useState<Tool["kind"]>("tool");
+
+  // Entries added by name (e.g. ticked in a repair) that match a suggestion are filed under it.
+  useEffect(() => {
+    if (!tools) return;
+    for (const tool of tools) {
+      if (tool.key) continue;
+      const e = bestCatalogEntry(tool.name);
+      if (!e) continue;
+      if (tools.some((x) => x.key === e.key && x.id !== tool.id)) void db.tools.delete(tool.id!);
+      else void db.tools.update(tool.id!, { key: e.key, name: e[lang], kind: e.kind });
+    }
+  }, [tools, lang]);
 
   // Endless suggestions: when the bottom comes into view, reveal the next groups.
   useEffect(() => {

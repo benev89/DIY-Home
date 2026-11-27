@@ -26,6 +26,10 @@ export interface Item {
   manualSearchedAt?: number;
   /** Maintenance ideas from the AI, shown as tap-to-add suggestions. */
   careSuggestions?: CareSuggestion[];
+  /** Warranty end date, "YYYY-MM-DD". */
+  warrantyUntil?: string;
+  /** Photos of the receipt (needed for warranty claims). */
+  receiptPhotoIds?: number[];
   photoIds: number[];
   createdAt: number;
   updatedAt: number;
@@ -90,11 +94,27 @@ export interface Repair {
   /** What a web search found before the diagnosis (error codes, model-specific fixes). */
   research?: Research;
   stepsDone: number[];
+  /** Where you are in workshop mode. */
+  currentStep?: number;
+  /** Parts from the shopping list marked as bought. */
+  boughtParts?: string[];
   status: RepairStatus;
   outcome?: string;
   costUsd: number;
   createdAt: number;
   updatedAt: number;
+}
+
+/** A running countdown in workshop mode ("let the silicone dry 30 min"). */
+export interface Timer {
+  id?: number;
+  repairId?: number;
+  step?: number;
+  label: string;
+  endsAt: number;
+  durationMs: number;
+  /** Set when the time is up and you've seen it. */
+  finished?: boolean;
 }
 
 export interface Setting {
@@ -120,6 +140,7 @@ export const db = new Dexie("diy-home") as Dexie & {
   settings: EntityTable<Setting, "key">;
   usage: EntityTable<UsageEntry, "id">;
   tasks: EntityTable<Task, "id">;
+  timers: EntityTable<Timer, "id">;
 };
 
 db.version(1).stores({
@@ -134,6 +155,10 @@ db.version(1).stores({
 // v2: maintenance tasks. Dexie upgrades existing databases automatically; nothing is lost.
 db.version(2).stores({
   tasks: "++id, itemId, nextDue",
+});
+// v3: workshop timers
+db.version(3).stores({
+  timers: "++id, repairId, endsAt",
 });
 
 export async function getSetting<T>(key: string, fallback: T): Promise<T> {

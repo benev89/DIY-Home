@@ -1,0 +1,18 @@
+# Cloudflare Worker for DIY Home: push notifications + calendar feed.
+# Deployed by .github/workflows/deploy.yml when the CLOUDFLARE_API_TOKEN secret is set.
+name = "diy-home-server"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+[vars]
+# Only the app itself may write to the server from a browser.
+ALLOWED_ORIGINS = "https://benev89.github.io,http://localhost:5173,http://localhost:4173"
+APP_URL = "https://benev89.github.io/DIY-Home/"
+
+[[durable_objects.bindings]]
+name = "USERS"
+class_name = "UserStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["UserStore"]

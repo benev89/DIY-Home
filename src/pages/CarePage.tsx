@@ -7,6 +7,8 @@ import { bucket, INTERVAL_CHOICES, intervalLabel, type DueBucket } from "../care
 import { Header } from "../components/ui";
 import { TaskRow } from "../components/TaskRow";
 import { exportToCalendar } from "../calendar";
+import { hasServer } from "../server";
+import { CalendarSubscribe } from "../components/CalendarSubscribe";
 import { loadMissingCareSuggestions } from "../careAi";
 import { Link } from "react-router-dom";
 
@@ -71,11 +73,14 @@ export default function CarePage() {
         );
       })}
 
-      {!!tasks?.length && (
-        <button className="btn block" onClick={() => exportToCalendar(tasks.map((x) => ({ ...x, itemName: nameOf(x.itemId) })))}>
-          📅 {t.allToCalendar}
-        </button>
-      )}
+      {!!tasks?.length &&
+        (hasServer() ? (
+          <CalendarSubscribe />
+        ) : (
+          <button className="btn block" onClick={() => exportToCalendar(tasks.map((x) => ({ ...x, itemName: nameOf(x.itemId) })))}>
+            📅 {t.allToCalendar}
+          </button>
+        ))}
 
       {(suggestionsByItem.length > 0 || loadingLeft > 0) && (
         <section>

@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { addTask, db, deleteRepair, type RepairStatus } from "../db";
 import { useI18n } from "../i18n";
 import { describeError, MODELS, preventionTips, RefusalError } from "../ai";
@@ -8,6 +8,7 @@ import { askFollowUp, thinkHarder } from "../repairs";
 import { formatUsd, Header, PhotoPicker, Thumb } from "../components/ui";
 import { DictationTextarea } from "../components/Dictation";
 import { useDraft } from "../persist";
+import { formatDate, underWarranty } from "../warranty";
 import { NeedsList } from "../components/NeedsList";
 import { intervalLabel } from "../care";
 
@@ -30,6 +31,14 @@ export default function RepairPage() {
   const [strong, setStrong] = useState(false);
   const [busy, setBusy] = useState<"followup" | "harder" | null>(null);
   const [error, setError] = useState<string>();
+
+  // "#status" / "#ask" in the address (e.g. after finishing workshop mode): jump there.
+  const location = useLocation();
+  useEffect(() => {
+    if (!repair || !location.hash) return;
+    const el = document.getElementById(location.hash.slice(1));
+    setTimeout(() => el?.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
+  }, [location.hash, !!repair]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!repair) return null;
   const d = repair.diagnosis;
@@ -64,6 +73,15 @@ export default function RepairPage() {
   return (
     <>
       <Header back title={repair.title} />
+      {underWarranty(item) && (
+        <div className="callout warn">
+          🛡 <strong>
+            {t.warrantyValidUntil} {formatDate(item!.warrantyUntil!)}
+          </strong>
+          <br />
+          {t.warrantyWarning} {item!.receiptPhotoIds?.length ? t.receiptSaved : t.receiptMissing}
+        </div>
+      )}
       {item && (
         <p className="muted">
           {t.forItem} <Link to={`/item/${item.id}`}>{item.name}</Link>
@@ -171,17 +189,23 @@ export default function RepairPage() {
             <section>
               <h2>{t.youNeed}</h2>
               <p className="muted small">{t.needsHint}</p>
-              <NeedsList kind="tool" needs={d.tools.map((x) => ({ name: x.name, ownedAs: x.owned_as ?? (x.owned ? undefined : "") }))} />
+              <NeedsList kind="tool" needs={d.tools.map((x) => ({ name: x.name, ownedAs: x.owned_as ?? (x.owned ? undefined : ""), catalogKey: x.catalog_key }))} />
               {d.parts.length > 0 && (
                 <>
                   <h3>{t.parts}</h3>
                   <NeedsList
                     kind="supply"
-                    needs={d.parts.map((p) => ({ name: p.name, detail: [p.spec, p.price_estimate].filter(Boolean).join(" · "), ownedAs: "" }))}
+                    needs={d.parts.map((p) => ({ name: p.name, detail: [p.spec, p.price_estimate].filter(Boolean).join(" · "), ownedAs: "", catalogKey: p.catalog_key }))}
                   />
                 </>
               )}
             </section>
+          )}
+
+          {d.steps.length > 0 && (
+            <Link to={`/repair/${id}/work`} className="btn primary block big">
+              ▶︎ {repair.stepsDone.length ? t.continueWork : t.startWorkshop}
+            </Link>
           )}
 
           {d.steps.length > 0 && (
@@ -245,7 +269,7 @@ export default function RepairPage() {
         </>
       )}
 
-      <section>
+      <section id="ask">
         <h2>{t.followUp}</h2>
         <div className="chat">
           {repair.chat.map((m, i) => (
@@ -277,7 +301,7 @@ export default function RepairPage() {
 
       {error && <div className="callout error">{error}</div>}
 
-      <section>
+      <section id="status">
         <h2>{t.status}</h2>
         <div className="segmented">
           {STATUSES.map((s) => (

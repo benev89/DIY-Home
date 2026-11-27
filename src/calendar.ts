@@ -33,8 +33,14 @@ export function rrule(days: number): string {
   return `FREQ=DAILY;INTERVAL=${days}`;
 }
 
-export function buildIcs(tasks: (Task & { itemName?: string })[], now = Date.now()): string {
+export function buildIcs(
+  tasks: (Task & { itemName?: string })[],
+  now = Date.now(),
+  opts: { alarms?: boolean; name?: string } = {},
+): string {
+  const alarms = opts.alarms ?? true;
   const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//DIY Home//Care reminders//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"];
+  if (opts.name) lines.push(`X-WR-CALNAME:${escape(opts.name)}`, "REFRESH-INTERVAL;VALUE=DURATION:PT1H", "X-PUBLISHED-TTL:PT1H");
   for (const t of tasks) {
     const title = `🔧 ${t.title}${t.itemName ? ` – ${t.itemName}` : ""}`;
     const start = Math.max(t.nextDue, now);
@@ -48,11 +54,7 @@ export function buildIcs(tasks: (Task & { itemName?: string })[], now = Date.now
       `SUMMARY:${escape(title)}`,
       ...(t.how ? [`DESCRIPTION:${escape(t.how)}`] : []),
       "TRANSP:TRANSPARENT",
-      "BEGIN:VALARM",
-      "ACTION:DISPLAY",
-      `DESCRIPTION:${escape(title)}`,
-      "TRIGGER:PT9H", // 09:00 on the due day
-      "END:VALARM",
+      ...(alarms ? ["BEGIN:VALARM", "ACTION:DISPLAY", `DESCRIPTION:${escape(title)}`, "TRIGGER:PT9H", "END:VALARM"] : []), // 09:00 on the due day
       "END:VEVENT",
     );
   }
@@ -80,4 +82,17 @@ export async function exportToCalendar(tasks: (Task & { itemName?: string })[], 
   a.download = filename;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/** Google Calendar "new event" page, pre-filled with one repeating all-day event. Works without a server. */
+export function googleEventUrl(t: Task & { itemName?: string }, now = Date.now()): string {
+  const start = Math.max(t.nextDue, now);
+  const p = new URLSearchParams({
+    action: "TEMPLATE",
+    text: `🔧 ${t.title}${t.itemName ? ` – ${t.itemName}` : ""}`,
+    dates: `${dateOnly(start)}/${dateOnly(start + 86_400_000)}`,
+    details: t.how ?? "",
+    recur: `RRULE:${rrule(t.intervalDays)}`,
+  });
+  return `https://calendar.google.com/calendar/render?${p}`;
 }
