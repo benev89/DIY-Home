@@ -19,6 +19,12 @@ export function manualSearchUrl(brand: string | undefined, model: string | undef
   return `https://www.google.com/search?q=${encodeURIComponent(q)}`;
 }
 
+function addYears(years: number): string {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() + years);
+  return d.toISOString().slice(0, 10);
+}
+
 const hasContent = (d: Draft) => !!(d.name.trim() || d.photoIds.length || d.brand || d.model || d.notes || d.specs);
 
 /**
@@ -48,7 +54,9 @@ export default function ItemForm() {
   const [readResult, setReadResult] = useState<{ filled: string[]; comment: string; query: string }>();
   const [readError, setReadError] = useState<string>();
   const [manualState, setManualState] = useState<"searching" | "found" | "none" | "error">();
-  const areaTouched = useRef(!!areaFromUrl || !!params.id);
+  const autoRead = search.get("read") === "1"; // just scanned from the start screen
+  const areaTouched = useRef(!!areaFromUrl || (!!params.id && !autoRead));
+  const autoReadDone = useRef(false);
   const isNew = !params.id;
 
   useEffect(() => {
@@ -64,6 +72,15 @@ export default function ItemForm() {
   useEffect(() => {
     if (!draft.areaId && areas?.length) setDraft((d) => ({ ...d, areaId: areas[0].id! }));
   }, [areas, draft.areaId]);
+
+  // Coming from "Scan device": read the label right away.
+  useEffect(() => {
+    if (autoRead && loaded && apiKey && areas && draft.photoIds.length && !autoReadDone.current) {
+      autoReadDone.current = true;
+      void readPhotos(draft.photoIds);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRead, loaded, apiKey, areas, draft.photoIds.length]);
 
   /** Write the draft to the database (create the item the first time). Returns the item id. */
   const persist = async (next: Draft): Promise<number | undefined> => {
@@ -126,7 +143,8 @@ export default function ItemForm() {
       const next = { ...d };
       for (const k of Object.keys(found) as TextField[]) {
         const val = found[k]?.trim();
-        if (val && !d[k]?.trim()) {
+        const current = k === "name" && d.name === t.newItem ? "" : d[k]?.trim();
+        if (val && !current) {
           next[k] = val;
           filled.push(labels[k]);
         }
@@ -213,7 +231,7 @@ export default function ItemForm() {
 
         <label>
           {t.name} *
-          <input value={draft.name} onChange={(e) => set("name", e.target.value)} placeholder={t.namePlaceholder} />
+          <input value={draft.name === t.newItem ? "" : draft.name} onChange={(e) => set("name", e.target.value)} placeholder={t.namePlaceholder} />
         </label>
         <label>
           {t.area}
@@ -274,6 +292,27 @@ export default function ItemForm() {
           <input ref={pdfInput} type="file" accept="application/pdf" hidden onChange={(e) => attachPdf(e.target.files?.[0])} />
         </div>
         {field("manualUrl", t.manualUrl)}
+
+        <div className="warranty-box">
+          <span className="label">🛡 {t.warranty}</span>
+          <label>
+            {t.warrantyUntil}
+            <input type="date" value={draft.warrantyUntil ?? ""} onChange={(e) => set("warrantyUntil", e.target.value || undefined)} />
+          </label>
+          {!draft.warrantyUntil && (
+            <div className="row-wrap">
+              {[2, 3, 5].map((years) => (
+                <button key={years} type="button" className="pick small-pick" onClick={() => set("warrantyUntil", addYears(years))}>
+                  <span className="pick-mark">＋</span>
+                  {years} {t.yearsFromToday}
+                </button>
+              ))}
+            </div>
+          )}
+          <small className="muted">{t.warrantyHint}</small>
+          <span className="label">{t.receipt}</span>
+          <PhotoPicker ids={draft.receiptPhotoIds ?? []} onChange={(ids) => set("receiptPhotoIds", ids)} />
+        </div>
 
         <p className="muted small center">{itemId ? `✓ ${t.autoSaved}` : t.autoSaveHint}</p>
         <button className="btn primary block" type="submit">

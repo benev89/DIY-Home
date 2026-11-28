@@ -27,6 +27,8 @@ export default defineConfig({
       workbox: {
         // The Anthropic SDK makes the bundle large; allow it to be precached for offline use.
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+        // Push notification handling (see public/push-sw.js).
+        importScripts: ["push-sw.js"],
       },
     }),
   ],

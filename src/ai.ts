@@ -11,6 +11,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import type { ContentBlockParam, Message, MessageParam } from "@anthropic-ai/sdk/resources/messages";
 import { z } from "zod";
 import type { Lang } from "./i18n";
+import { CATALOG } from "./toolCatalog";
 
 // Cheap default model, plus a stronger one for the "Think harder" button.
 export const MODELS = {
@@ -61,6 +62,9 @@ export const DiagnosisSchema = z.object({
       title: z.string().describe("Short imperative, e.g. 'Turn off the water under the sink'"),
       detail: z.string().describe("Exactly how to do it, including what it should look like"),
       warning: z.string().describe("A specific risk in this step, or empty string"),
+      wait_minutes: z
+        .number()
+        .describe("If this step means waiting (soaking, drying, curing, cooling down, letting descaler work): minutes to wait. Else 0"),
     }),
   ),
   tools: z.array(
@@ -70,6 +74,7 @@ export const DiagnosisSchema = z.object({
       owned_as: z
         .string()
         .describe("If owned: the exact entry from the user's tool or supply list that covers it, copied verbatim. Else empty."),
+      catalog_key: z.string().describe("Key of the matching entry in the tool catalog (same kind of tool), or empty"),
     }),
   ),
   parts: z.array(
@@ -77,6 +82,7 @@ export const DiagnosisSchema = z.object({
       name: z.string(),
       spec: z.string().describe("Exact size/type/part number if known, else what to measure or look for"),
       price_estimate: z.string().describe("Rough price range in local currency, e.g. '5-15 €'"),
+      catalog_key: z.string().describe("Key of the matching entry in the tool catalog if this is a common supply (e.g. descaler), else empty"),
     }),
   ),
   difficulty: z.enum(["easy", "medium", "hard"]),
@@ -114,6 +120,7 @@ How to help:
 - Always end with prevention: how to keep this from happening again (habits, cleaning, maintenance intervals).
 - Be honest about uncertainty. Do not invent part numbers; if unsure, say what to measure or which label to read.
 - Error/fault codes differ between manufacturers and even models. Only state a code's meaning if web research below confirms it or you are certain for this exact model; otherwise say clearly that you are not sure and tell the user to check the manual's error-code table.
+- If the item is STILL UNDER WARRANTY: make contacting the seller/manufacturer the first step, and do not suggest opening the device or anything that could void the warranty; only safe outside checks (settings, cleaning filters, resetting).
 - If a "Web research" section is given, prefer it over your own memory, and mention when your plan relies on it.
 
 Safety rules (these override everything):
@@ -122,8 +129,13 @@ Safety rules (these override everything):
 - For safety-critical bike or vehicle parts (brakes, steering, tyres, quick releases), set level to at least "caution" and include a test before use.
 ${region ? `- The user lives in: ${region}. Apply that country's rules (e.g. in Germany, work on the fixed electrical installation is for a registered electrician) and use its currency, units and typical shops.` : ""}
 
-Write everything in ${language}. Be concise and friendly; no filler.`;
+Write everything in ${language}. Be concise and friendly; no filler.
+
+Tool catalog (for catalog_key; key = English / German name):
+${CATALOG_TEXT}`;
 }
+
+const CATALOG_TEXT = CATALOG.flatMap((g) => g.entries.map((e) => `${e.key} = ${e.en} / ${e.de}`)).join("\n");
 
 export interface ContextInput {
   item?: {
@@ -134,6 +146,8 @@ export interface ContextInput {
     purchased?: string;
     specs?: string;
     notes?: string;
+    warrantyUntil?: string;
+    underWarranty?: boolean;
   };
   pastRepairs: { title: string; status: string; outcome?: string; date: string }[];
   tools: string[];
@@ -155,6 +169,7 @@ export function buildContext(c: ContextInput): string {
     if (i.purchased) lines.push(`- Bought: ${i.purchased}`);
     if (i.specs) lines.push(`- Parts & sizes: ${i.specs}`);
     if (i.notes) lines.push(`- Notes: ${i.notes}`);
+    if (i.warrantyUntil) lines.push(`- Warranty until: ${i.warrantyUntil}${i.underWarranty ? " (STILL UNDER WARRANTY)" : " (expired)"}`);
     if (c.pastRepairs.length) {
       lines.push("", "## Past repairs on this item");
       for (const r of c.pastRepairs) {
@@ -398,9 +413,13 @@ Suggest the regular maintenance and care this item needs in a normal household (
 
 type Source = { title: string; url: string };
 
-/** Run one request with the web search tool, continuing if the server pauses the turn. */
+/**
+ * Run one request with the web search tool, continuing if the server pauses the turn.
+ * Uses the cheap Haiku model: a lookup costs about 1 cent per search ($10 / 1,000) plus a
+ * fraction of a cent for reading the results. Capped at `maxUses` searches.
+ */
 async function withWebSearch(apiKey: string, prompt: string, maxUses: number) {
-  const model = MODELS.strong;
+  const model = MODELS.fast;
   const messages: MessageParam[] = [{ role: "user", content: prompt }];
   let inputTokens = 0;
   let outputTokens = 0;
@@ -460,8 +479,8 @@ Problem: ${opts.problem}
 ${opts.region ? `Location: ${opts.region}` : ""}
 
 Find what the manufacturer and reliable repair sources say: the exact meaning of any error code for this brand/model, the usual causes and the recommended fix or reset procedure. Prefer the manufacturer's own pages and manuals.
-Then write a factual summary of at most 150 words in ${language}. Say clearly if sources disagree or if nothing specific to this model was found. No advice beyond what the sources say.`,
-    4,
+Search at most twice. Then write a factual summary of at most 150 words in ${language}. Say clearly if sources disagree or if nothing specific to this model was found. No advice beyond what the sources say.`,
+    2,
   );
   return {
     value: { summary: r.text.trim(), sources: r.sources.slice(0, 5) },
@@ -473,16 +492,24 @@ Then write a factual summary of at most 150 words in ${language}. Say clearly if
   };
 }
 
+const ERROR_CODE = /\b(?:[EFHCU]\s?:?-?\s?\d{1,3}|(?:fehlercode|errorcode|error|fehler|code|err)\s*[A-Z]?\s?:?-?\s?\d{1,4})\b/gi;
+const stripLampSockets = (text: string) => text.replace(/\bE\s?(14|27|40)\b/gi, ""); // lamp sockets, not error codes
+
+/** Error codes in a text, normalised: "Fehler E:11" → ["E11"], "E011" → ["E011"]. */
+export function errorCodes(text: string): string[] {
+  const found = stripLampSockets(text).match(ERROR_CODE) ?? [];
+  return [...new Set(found.map((c) => c.toUpperCase().replace(/FEHLERCODE|ERRORCODE|ERROR|FEHLER|CODE|ERR|[\s:-]/g, "")))].sort();
+}
+
 /** Does the description mention an error code like "E011", "F 21", "Fehler 5", "error E:24"? */
 export function mentionsErrorCode(text: string): boolean {
-  text = text.replace(/\bE\s?(14|27|40)\b/gi, ""); // lamp sockets, not error codes
+  text = stripLampSockets(text);
   return /\b(?:[EFHCU]\s?:?-?\s?\d{1,3}|(?:fehlercode|errorcode|error|fehler|code|err)\s*[A-Z]?\s?:?-?\s?\d{1,4})\b/i.test(text);
 }
 
 /**
  * Search the web for the item's manual and return the best link, or null.
- * Uses Sonnet with Anthropic's web search tool (the cheap Haiku model can't search the web).
- * Costs roughly 2-5 cents, once per item.
+ * Uses the cheap Haiku model with Anthropic's web search tool (about 1-2 cents, once per item).
  */
 export async function findManualUrl(opts: {
   apiKey: string;
@@ -500,7 +527,7 @@ Only give a URL that appeared in your search results; never make one up.
 Finish your answer with exactly two lines:
 URL: <the link, or NONE>
 TITLE: <short description, e.g. "Bosch user manual (PDF, German)">`,
-    3,
+    2,
   );
   const url = r.text.match(/URL:\s*(https?:\/\/\S+)/i)?.[1]?.replace(/[)>.,]+$/, "");
   const title = r.text.match(/TITLE:\s*(.+)/i)?.[1]?.trim() ?? "";

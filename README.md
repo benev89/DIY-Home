@@ -37,15 +37,44 @@ npm run build      # type-check + production build into dist/
 | `src/i18n.tsx` | All UI text in English and German |
 | `src/images.ts` | Shrinks phone photos to 1568 px before saving (less storage, fewer tokens) |
 | `src/backup.ts` | Export/import of everything as one JSON file (the API key is never exported) |
-| `src/pages/*` | One file per screen |
+| `src/pages/*` | One file per screen (`WorkshopPage` = step-by-step mode with timers) |
+| `src/server.ts` | Talks to the notification/calendar server |
+| `src/timers.ts` | Workshop timers (stored as end times, so they survive closing the app) |
+| `src/shopping.ts` | Shopping list = what open repairs need that you don't own |
+| `server/` | Cloudflare Worker: Web Push (RFC 8291/8292, no libraries) + calendar feed |
 | `src/styles.css` | All styling, mobile-first, light/dark mode |
 
 **Key design decisions**
 
-- **Local-first, no server.** Simplest and most private. The trade-off is that you must make backups. Cloud sync can be added later.
+- **Local-first.** Devices, photos and repairs live only on the phone (back them up). The optional server only knows care-task titles, due dates and timers – for notifications and the calendar feed.
 - **The API key lives on the device**, entered in Settings. It is never in the code or the repo.
 - **Structured diagnosis.** The first AI answer is JSON validated by a Zod schema, so the app can render a checklist with tools you have and don't have, parts to buy, and safety warnings.
 - **Frozen context.** The text sent with the first question is stored with the repair, so follow-ups replay exactly the same conversation.
+
+## Notifications & calendar server (optional, free)
+
+Push notifications (timer done, care due at 09:00) and the self-updating calendar subscription need
+a tiny server, because an iPhone web app can't notify you or keep time once it's closed. It runs on
+Cloudflare's free plan (`server/`). Only care-task titles, due dates, timer labels and the push address
+are stored there – no photos, devices or keys.
+
+**One-time setup (about 10 minutes, works on the phone):**
+
+1. Create a free account at <https://dash.cloudflare.com/sign-up>.
+2. In the dashboard open **Workers & Pages** once. If it asks for a `workers.dev` subdomain, pick any name.
+3. Copy your **Account ID** (shown on the right of the Workers & Pages overview).
+4. **My Profile → API Tokens → Create Token →** template **"Edit Cloudflare Workers"** → Continue → Create. Copy the token.
+5. On GitHub: this repo → **Settings → Secrets and variables → Actions → New repository secret**, twice:
+   - `CLOUDFLARE_API_TOKEN` = the token
+   - `CLOUDFLARE_ACCOUNT_ID` = the account ID
+6. **Actions → Deploy to GitHub Pages → Run workflow** (or merge any change). The workflow deploys the
+   server and builds the app with its address.
+7. In the app (opened from the home-screen icon): **⚙️ → Turn on notifications → Send test**, then
+   **Care → Apple Calendar / Google Calendar** to subscribe.
+
+Without these secrets everything else works; the app just offers per-task calendar links instead.
+
+Server tests run locally: `cd server && npx wrangler dev`.
 
 ## Deploying
 

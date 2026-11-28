@@ -3,7 +3,8 @@ import { Link } from "react-router-dom";
 import { db, markTaskDone, type Task } from "../db";
 import { useI18n } from "../i18n";
 import { bucket, dueLabel, INTERVAL_CHOICES, intervalLabel } from "../care";
-import { exportToCalendar } from "../calendar";
+import { exportToCalendar, googleEventUrl } from "../calendar";
+import { hasServer } from "../server";
 
 /** One maintenance task: tap ✓ when done; tap the text for details. */
 export function TaskRow({ task, itemName }: { task: Task; itemName?: string }) {
@@ -51,9 +52,16 @@ export function TaskRow({ task, itemName }: { task: Task; itemName?: string }) {
               {t.lastDone}: {task.doneLog.slice(-3).reverse().map((d) => new Date(d).toLocaleDateString()).join(", ")}
             </small>
           )}
-          <button className="btn" onClick={() => exportToCalendar([{ ...task, itemName }], `${task.title}.ics`)}>
-            📅 {t.addToCalendar}
-          </button>
+          {!hasServer() && (
+            <div className="row-wrap">
+              <a className="btn" href={googleEventUrl({ ...task, itemName })} target="_blank" rel="noreferrer">
+                📅 Google
+              </a>
+              <button className="btn" onClick={() => exportToCalendar([{ ...task, itemName }], `${task.title}.ics`)}>
+                📅 Apple / .ics
+              </button>
+            </div>
+          )}
           <button
             className="link danger"
             onClick={() => {

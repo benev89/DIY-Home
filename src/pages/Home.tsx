@@ -1,10 +1,13 @@
+import { useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { Link, useNavigate } from "react-router-dom";
-import { DAY, db } from "../db";
+import { DAY, db, saveFile } from "../db";
 import { useI18n } from "../i18n";
 import { bucket } from "../care";
+import { resizePhoto } from "../images";
+import { shoppingList } from "../shopping";
 import { Header, StatusBadge } from "../components/ui";
-import { TaskRow } from "../components/TaskRow";
+import { CalendarIcon, CameraIcon, CartIcon, ChevronIcon, WrenchIcon } from "../components/Icons";
 
 /** iPhone/iPad web page opened in Safari instead of from the home-screen icon. */
 export function isIosSafariTab(): boolean {
@@ -15,21 +18,35 @@ export function isIosSafariTab(): boolean {
 
 const BACKUP_EVERY = 30 * DAY;
 
+/** Start screen: the three things you come here for, then what's in progress. Nothing else. */
 export default function Home() {
   const { t } = useI18n();
   const navigate = useNavigate();
-  const areas = useLiveQuery(() => db.areas.orderBy("order").toArray(), []);
+  const camera = useRef<HTMLInputElement>(null);
+  const [scanning, setScanning] = useState(false);
   const items = useLiveQuery(() => db.items.toArray(), []);
-  const open = useLiveQuery(() => db.repairs.where("status").equals("open").reverse().sortBy("updatedAt"), []);
-  const due = useLiveQuery(async () => (await db.tasks.orderBy("nextDue").toArray()).filter((x) => bucket(x.nextDue) !== "later"), []);
+  const areas = useLiveQuery(() => db.areas.orderBy("order").toArray(), []);
+  const repairs = useLiveQuery(() => db.repairs.toArray(), []);
+  const tools = useLiveQuery(() => db.tools.toArray(), []);
+  const due = useLiveQuery(async () => (await db.tasks.toArray()).filter((x) => bucket(x.nextDue) === "overdue" || bucket(x.nextDue) === "soon"), []);
+  const dueNow = due?.filter((x) => bucket(x.nextDue) === "overdue" || x.nextDue - Date.now() < 7 * DAY) ?? [];
   const lastBackup = useLiveQuery(async () => ((await db.settings.get("lastBackup"))?.value as number | undefined) ?? 0, []);
   const needsBackup = lastBackup !== undefined && (items?.length ?? 0) >= 3 && Date.now() - lastBackup > BACKUP_EVERY;
+  const open = (repairs ?? []).filter((r) => r.status === "open").sort((a, b) => b.updatedAt - a.updatedAt);
+  const shopping = repairs && tools ? shoppingList(repairs, tools).length : 0;
 
-  const addArea = async () => {
-    const name = prompt(t.areaName);
-    if (!name?.trim()) return;
-    const id = await db.areas.add({ name: name.trim(), icon: "📦", order: areas?.length ?? 0 });
-    navigate(`/area/${id}`);
+  // "Scan a device": the camera opens straight away; the label is read on the next screen.
+  const scan = async (file?: File) => {
+    if (!file || !areas?.length) return;
+    setScanning(true);
+    try {
+      const photoId = await saveFile(await resizePhoto(file), file.name);
+      const now = Date.now();
+      const id = await db.items.add({ areaId: areas[0].id!, name: t.newItem, photoIds: [photoId], createdAt: now, updatedAt: now });
+      navigate(`/item/${id}/edit?read=1`);
+    } finally {
+      setScanning(false);
+    }
   };
 
   return (
@@ -49,38 +66,55 @@ export default function Home() {
         </Link>
       )}
 
-      <Link to="/fix" className="hero">
-        <span className="hero-icon">🔧</span>
-        <span>
-          <strong>{t.fixSomething}</strong>
-          <small>{t.fixSomethingHint}</small>
-        </span>
-      </Link>
+      <div className="actions">
+        <Link to="/fix" className="action primary">
+          <span className="action-icon">
+            <WrenchIcon />
+          </span>
+          <span className="action-text">
+            <strong>{t.fixSomething}</strong>
+            <small>{t.fixSomethingHint}</small>
+          </span>
+        </Link>
+        <div className="action-row">
+          <button className="action" onClick={() => camera.current?.click()} disabled={scanning}>
+            <span className="action-icon">
+              <CameraIcon />
+            </span>
+            <span className="action-text">
+              <strong>{scanning ? "…" : t.scanDevice}</strong>
+              <small>{t.scanDeviceHint}</small>
+            </span>
+          </button>
+          <Link to="/care" className={`action ${dueNow.length ? "attention" : ""}`}>
+            <span className="action-icon">
+              <CalendarIcon />
+              {dueNow.length > 0 && <span className="badge-count">{dueNow.length}</span>}
+            </span>
+            <span className="action-text">
+              <strong>{t.care}</strong>
+              <small>{dueNow.length ? `${dueNow.length} ${t.dueSoonShort}` : t.allDone}</small>
+            </span>
+          </Link>
+        </div>
+        <input ref={camera} type="file" accept="image/*" capture="environment" hidden onChange={(e) => scan(e.target.files?.[0])} />
+      </div>
 
-      {!!due?.length && (
+      {open.length > 0 && (
         <section>
-          <h2>🗓 {t.careDue}</h2>
-          <ul className="list">
-            {due.slice(0, 5).map((task) => (
-              <TaskRow key={task.id} task={task} itemName={items?.find((i) => i.id === task.itemId)?.name} />
-            ))}
-          </ul>
-          {due.length > 5 && (
-            <Link to="/care" className="small">
-              {t.showAll} ›
-            </Link>
-          )}
-        </section>
-      )}
-
-      {!!open?.length && (
-        <section>
-          <h2>{t.openRepairs}</h2>
-          <ul className="list">
+          <h2>{t.inProgress}</h2>
+          <ul className="list grouped">
             {open.map((r) => (
               <li key={r.id}>
-                <Link to={`/repair/${r.id}`} className="row">
-                  <span className="grow">{r.title}</span>
+                <Link to={r.diagnosis?.steps.length ? `/repair/${r.id}/work` : `/repair/${r.id}`} className="row">
+                  <span className="grow">
+                    <strong>{r.title}</strong>
+                    {!!r.diagnosis?.steps.length && (
+                      <small>
+                        {t.step} {Math.min((r.currentStep ?? 0) + 1, r.diagnosis.steps.length)} / {r.diagnosis.steps.length} · {t.continueWork}
+                      </small>
+                    )}
+                  </span>
                   <StatusBadge status={r.status} />
                 </Link>
               </li>
@@ -89,24 +123,25 @@ export default function Home() {
         </section>
       )}
 
-      <section>
-        <h2>{t.areas}</h2>
-        <div className="grid">
-          {areas?.map((a) => (
-            <Link key={a.id} to={`/area/${a.id}`} className="tile">
-              <span className="tile-icon">{a.icon}</span>
-              <span>{a.name}</span>
-              <small>
-                {items?.filter((i) => i.areaId === a.id).length ?? 0} {t.items}
-              </small>
+      <ul className="list grouped" style={{ marginTop: 24 }}>
+        {shopping > 0 && (
+          <li>
+            <Link to="/shopping" className="row">
+              <CartIcon />
+              <span className="grow">{t.shopping}</span>
+              <span className="badge-count inline">{shopping}</span>
+              <ChevronIcon />
             </Link>
-          ))}
-          <button className="tile tile-add" onClick={addArea}>
-            <span className="tile-icon">＋</span>
-            <span>{t.addArea}</span>
-          </button>
-        </div>
-      </section>
+          </li>
+        )}
+        <li>
+          <Link to="/history" className="row">
+            <span className="row-icon">📋</span>
+            <span className="grow">{t.allRepairs}</span>
+            <ChevronIcon />
+          </Link>
+        </li>
+      </ul>
     </>
   );
 }
