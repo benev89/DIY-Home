@@ -8,7 +8,7 @@ import { Header } from "../components/ui";
 import { TaskRow } from "../components/TaskRow";
 import { exportToCalendar } from "../calendar";
 import { hasServer } from "../server";
-import { CalendarSubscribe } from "../components/CalendarSubscribe";
+import { CalendarHorizon, CalendarSubscribe, useCalendarYears } from "../components/CalendarSubscribe";
 import { loadMissingCareSuggestions } from "../careAi";
 import { Link } from "react-router-dom";
 
@@ -22,6 +22,7 @@ export default function CarePage() {
   const [itemId, setItemId] = useState<number | undefined>(Number(search.get("item")) || undefined);
   const [intervalDays, setIntervalDays] = useState(90);
   const [loadingLeft, setLoadingLeft] = useState(0);
+  const years = useCalendarYears();
   const apiKey = useLiveQuery(async () => (await db.settings.get("apiKey"))?.value as string | undefined, []);
 
   // Every item in your list gets maintenance ideas automatically (fetched once per item).
@@ -77,9 +78,12 @@ export default function CarePage() {
         (hasServer() ? (
           <CalendarSubscribe />
         ) : (
-          <button className="btn block" onClick={() => exportToCalendar(tasks.map((x) => ({ ...x, itemName: nameOf(x.itemId) })))}>
-            📅 {t.allToCalendar}
-          </button>
+          <>
+            <button className="btn block" onClick={() => exportToCalendar(tasks.map((x) => ({ ...x, itemName: nameOf(x.itemId) })), undefined, years)}>
+              📅 {t.allToCalendar}
+            </button>
+            <CalendarHorizon />
+          </>
         ))}
 
       {(suggestionsByItem.length > 0 || loadingLeft > 0) && (

@@ -5,6 +5,7 @@ import { useI18n, type Lang } from "../i18n";
 import { describeError, testKey } from "../ai";
 import { downloadText, exportAll, importAll } from "../backup";
 import { formatUsd, Header } from "../components/ui";
+import { testGemini } from "../gemini";
 import { disablePush, enablePush, hasServer, pushSupported, testPush } from "../server";
 import { CalendarSubscribe } from "../components/CalendarSubscribe";
 import { isIosSafariTab } from "./Home";
@@ -13,6 +14,8 @@ export default function SettingsPage() {
   const { t, lang, setLang } = useI18n();
   const [apiKey, setApiKey] = useState("");
   const [region, setRegion] = useState("");
+  const [geminiKey, setGeminiKey] = useState("");
+  const [geminiStatus, setGeminiStatus] = useState<string>();
   const [keyStatus, setKeyStatus] = useState<string>();
   const [persisted, setPersisted] = useState<boolean>();
   const [lastBackup, setLastBackup] = useState<number>();
@@ -21,6 +24,7 @@ export default function SettingsPage() {
   useEffect(() => {
     getSetting("apiKey", "").then(setApiKey);
     getSetting("region", "").then(setRegion);
+    getSetting("geminiKey", "").then(setGeminiKey);
     navigator.storage?.persisted?.().then(setPersisted);
     getSetting<number | undefined>("lastBackup", undefined).then(setLastBackup);
   }, []);
@@ -75,6 +79,37 @@ export default function SettingsPage() {
           {t.testKey}
         </button>
         {keyStatus && <small>{keyStatus}</small>}
+
+        <label>
+          {t.geminiKey}
+          <input
+            type="password"
+            autoComplete="off"
+            value={geminiKey}
+            placeholder="AIza…"
+            onChange={(e) => setGeminiKey(e.target.value)}
+            onBlur={() => setSetting("geminiKey", geminiKey.trim())}
+          />
+          <small className="muted">
+            {t.geminiKeyHint}{" "}
+            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">
+              aistudio.google.com/apikey
+            </a>
+          </small>
+        </label>
+        {geminiKey.trim() && (
+          <button
+            className="btn"
+            onClick={async () => {
+              setGeminiStatus("…");
+              const r = await testGemini(geminiKey.trim());
+              setGeminiStatus(!r.keyOk ? `${t.geminiKeyBad} (${r.error})` : r.grounding ? `${t.geminiOk} (${r.model})` : t.geminiNoGrounding);
+            }}
+          >
+            {t.testGemini}
+          </button>
+        )}
+        {geminiStatus && <small>{geminiStatus}</small>}
 
         <label>
           {t.language}

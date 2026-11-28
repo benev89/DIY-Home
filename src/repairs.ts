@@ -107,6 +107,7 @@ export async function startRepair(input: {
         ...s,
         item: item && { name: item.name, brand: item.brand, model: item.model },
         problem: input.problem,
+        geminiKey: (await getSetting("geminiKey", "")) || undefined,
       });
       await recordUsage(r);
       research = r.value;

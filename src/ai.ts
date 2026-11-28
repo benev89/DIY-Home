@@ -12,6 +12,7 @@ import type { ContentBlockParam, Message, MessageParam } from "@anthropic-ai/sdk
 import { z } from "zod";
 import type { Lang } from "./i18n";
 import { CATALOG } from "./toolCatalog";
+import { geminiSearch, urlMatchesSources, type GeminiGrounded } from "./gemini";
 
 // Cheap default model, plus a stronger one for the "Think harder" button.
 export const MODELS = {
@@ -259,7 +260,7 @@ function toReplayable(message: Message): ContentBlockParam[] {
 export interface AiResult<T> {
   value: T;
   assistantTurn: MessageParam;
-  model: ModelId;
+  model: ModelId | string; // a Gemini model id when Gemini did the lookup
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
@@ -459,6 +460,24 @@ async function withWebSearch(apiKey: string, prompt: string, maxUses: number) {
 export interface Research {
   summary: string;
   sources: Source[];
+  /** Which service searched: "gemini" (free) or "claude". */
+  provider?: "gemini" | "claude";
+  /** Google Search Suggestions HTML (Google requires showing it with Gemini-grounded answers). */
+  suggestionsHtml?: string;
+}
+
+/** Ask Gemini first (free) if there is a key; on any refusal, fall back to Claude. */
+async function viaGemini<T>(geminiKey: string | undefined, prompt: string, use: (g: GeminiGrounded) => T | null): Promise<AiResult<T> | null> {
+  if (!geminiKey) return null;
+  try {
+    const g = await geminiSearch(geminiKey, prompt);
+    const value = use(g);
+    if (value === null) return null;
+    return { value, assistantTurn: { role: "assistant", content: g.text }, model: g.model, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+  } catch (e) {
+    console.warn("Gemini lookup failed, using Claude instead:", e);
+    return null;
+  }
 }
 
 /** Look the problem up online first: error codes and model-specific fixes the model may not know. */
@@ -468,22 +487,24 @@ export async function researchProblem(opts: {
   region: string;
   item?: { name: string; brand?: string; model?: string };
   problem: string;
+  geminiKey?: string;
 }): Promise<AiResult<Research>> {
   const language = opts.lang === "de" ? "German" : "English";
   const what = opts.item ? [opts.item.name, opts.item.brand, opts.item.model].filter(Boolean).join(", ") : "(unknown item)";
-  const r = await withWebSearch(
-    opts.apiKey,
-    `Research this home-repair problem online before anyone tries to fix it.
+  const prompt = `Research this home-repair problem online before anyone tries to fix it.
 Item: ${what}
 Problem: ${opts.problem}
 ${opts.region ? `Location: ${opts.region}` : ""}
 
 Find what the manufacturer and reliable repair sources say: the exact meaning of any error code for this brand/model, the usual causes and the recommended fix or reset procedure. Prefer the manufacturer's own pages and manuals.
-Search at most twice. Then write a factual summary of at most 150 words in ${language}. Say clearly if sources disagree or if nothing specific to this model was found. No advice beyond what the sources say.`,
-    2,
+Search at most twice. Then write a factual summary of at most 150 words in ${language}. Say clearly if sources disagree or if nothing specific to this model was found. No advice beyond what the sources say.`;
+  const free = await viaGemini(opts.geminiKey, prompt, (g) =>
+    g.sources.length ? { summary: g.text, sources: g.sources.slice(0, 5), provider: "gemini" as const, suggestionsHtml: g.suggestionsHtml } : null,
   );
+  if (free) return free;
+  const r = await withWebSearch(opts.apiKey, prompt, 2);
   return {
-    value: { summary: r.text.trim(), sources: r.sources.slice(0, 5) },
+    value: { summary: r.text.trim(), sources: r.sources.slice(0, 5), provider: "claude" },
     assistantTurn: { role: "assistant", content: toReplayable(r.res) },
     model: r.model,
     inputTokens: r.inputTokens,
@@ -517,18 +538,23 @@ export async function findManualUrl(opts: {
   name: string;
   brand?: string;
   model?: string;
+  geminiKey?: string;
 }): Promise<AiResult<{ url: string; title: string } | null>> {
   const what = [opts.brand, opts.model].filter(Boolean).join(" ");
-  const r = await withWebSearch(
-    opts.apiKey,
-    `Find the official user manual or installation instructions for this item: ${opts.name}, ${what}.
+  const prompt = `Find the official user manual or installation instructions for this item: ${opts.name}, ${what}.
 Prefer a PDF from the manufacturer's own website, ${opts.lang === "de" ? "in German if available" : "in English if available"}. Next best: a reputable manual site (e.g. manualslib). The model number must match.
 Only give a URL that appeared in your search results; never make one up.
 Finish your answer with exactly two lines:
 URL: <the link, or NONE>
-TITLE: <short description, e.g. "Bosch user manual (PDF, German)">`,
-    2,
-  );
+TITLE: <short description, e.g. "Bosch user manual (PDF, German)">`;
+  // Gemini's source links are redirects that expire, so we keep the link it names, but only if
+  // that website really was among the pages Google returned.
+  const free = await viaGemini(opts.geminiKey, prompt, (g) => {
+    const url = g.text.match(/URL:\s*(https?:\/\/\S+)/i)?.[1]?.replace(/[)>.,*]+$/, "");
+    return url && urlMatchesSources(url, g.sources) ? { url, title: g.text.match(/TITLE:\s*(.+)/i)?.[1]?.trim() ?? "" } : null;
+  });
+  if (free) return free;
+  const r = await withWebSearch(opts.apiKey, prompt, 2);
   const url = r.text.match(/URL:\s*(https?:\/\/\S+)/i)?.[1]?.replace(/[)>.,]+$/, "");
   const title = r.text.match(/TITLE:\s*(.+)/i)?.[1]?.trim() ?? "";
   return {
