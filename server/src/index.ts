@@ -8,7 +8,7 @@
 // No photos, no items, no API keys. Each phone has a random id (the feed URL) and a secret for writes.
 import { DurableObject } from "cloudflare:workers";
 import { generateVapidKeys, sendPush, type PushSubscriptionJSON, type VapidKeys } from "./webpush";
-import { localDay, localParts, nextNineAm } from "./timeutil";
+import { localDay, nextLocalTime, reachedLocalTime } from "./timeutil";
 
 export interface Env {
   USERS: DurableObjectNamespace<UserStore>;
@@ -27,6 +27,8 @@ interface State {
   ics: string;
   tasks: TaskSummary[];
   reminders: boolean;
+  /** Local time for the daily care reminder, "HH:MM" (default 09:00). */
+  reminderTime?: string;
   sub?: PushSubscriptionJSON;
   lastReminderDay?: string;
 }
@@ -119,7 +121,14 @@ export class UserStore extends DurableObject<Env> {
     const state = await this.ctx.storage.get<State>("state");
     const timers = (await this.ctx.storage.get<Record<string, Timer>>("timers")) ?? {};
     const times = Object.values(timers).map((t) => t.at);
-    if (state?.sub && state.reminders && state.tasks.length) times.push(nextNineAm(Date.now(), state.tz));
+    if (state?.sub && state.reminders && state.tasks.length) {
+      const now = Date.now();
+      times.push(nextLocalTime(now, state.tz, state.reminderTime));
+      // Time already passed today (e.g. you just moved it earlier) and today's reminder not sent yet: send it now.
+      const today = localDay(now, state.tz);
+      const dueToday = state.tasks.some((t) => localDay(t.nextDue, state.tz) <= today);
+      if (dueToday && state.lastReminderDay !== today && reachedLocalTime(now, state.tz, state.reminderTime)) times.push(now + 1000);
+    }
     if (times.length) await this.ctx.storage.setAlarm(Math.min(...times));
     else await this.ctx.storage.deleteAlarm();
   }
@@ -138,12 +147,11 @@ export class UserStore extends DurableObject<Env> {
     }
     await this.ctx.storage.put("timers", timers);
 
-    // 2. Daily care reminder (once per local day, after 09:00)
+    // 2. Daily care reminder (once per local day, at the user's chosen time)
     if (state?.reminders && state.sub && state.tasks.length) {
       const today = localDay(now, state.tz);
-      const p = localParts(now, state.tz);
       const due = state.tasks.filter((t) => localDay(t.nextDue, state!.tz) <= today);
-      if (p.h >= 9 && state.lastReminderDay !== today && due.length) {
+      if (reachedLocalTime(now, state.tz, state.reminderTime) && state.lastReminderDay !== today && due.length) {
         const de = state.lang === "de";
         await this.push(state, {
           title: de ? `🗓 Pflege fällig (${due.length})` : `🗓 Care due (${due.length})`,
@@ -223,6 +231,7 @@ export default {
           ics: String(s.ics ?? ""),
           tasks: Array.isArray(s.tasks) ? s.tasks.slice(0, 500) : [],
           reminders: !!s.reminders,
+          reminderTime: typeof s.reminderTime === "string" ? s.reminderTime.slice(0, 5) : undefined,
           sub: s.sub,
         });
         return json({ ok: true });

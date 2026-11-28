@@ -65,11 +65,6 @@ export async function disablePush(): Promise<void> {
   await syncNow();
 }
 
-export async function testPush(): Promise<string> {
-  const res = await call("POST", "test-push");
-  return (await res.json()).result;
-}
-
 // ---------- state sync (care tasks → calendar feed + daily reminder) ----------
 export async function syncNow(): Promise<void> {
   if (!hasServer()) return;
@@ -78,6 +73,7 @@ export async function syncNow(): Promise<void> {
   const nameOf = (id?: number) => items.find((i) => i.id === id)?.name;
   const withNames = tasks.map((t) => ({ ...t, itemName: nameOf(t.itemId) }));
   const pushOn = await getSetting("pushEnabled", false);
+  const reminderTime = await getSetting("reminderTime", "09:00");
   const horizonYears = await getSetting("calendarYears", 2);
   const today = new Date().toISOString().slice(0, 10);
   const active = withNames.filter((t) => !t.remindUntil || t.remindUntil >= today);
@@ -85,9 +81,11 @@ export async function syncNow(): Promise<void> {
     tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
     lang: await getSetting<Lang>("lang", "en"),
     // No alarms in the subscribed calendar: the 09:00 push already reminds you, once.
-    ics: buildIcs(withNames, Date.now(), { alarms: !pushOn, name: "DIY Home", horizonYears }),
+    // Without push, the calendar itself reminds you (at your reminder time); with push, only the push does.
+    ics: buildIcs(withNames, Date.now(), { alarms: !pushOn, alarmTime: reminderTime, name: "DIY Home", horizonYears }),
     tasks: active.map((t) => ({ title: t.title, item: t.itemName, nextDue: t.nextDue })),
     reminders: pushOn && (await getSetting("careReminders", true)),
+    reminderTime,
     sub: pushOn ? ((await getSetting("pushSub", null)) ?? undefined) : undefined,
   });
   if (res.ok) await setSetting("lastSync", Date.now());

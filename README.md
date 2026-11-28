@@ -53,7 +53,7 @@ npm run build      # type-check + production build into dist/
 
 ## Notifications & calendar server (optional, free)
 
-Push notifications (timer done, care due at 09:00) and the self-updating calendar subscription need
+Push notifications (timer done, care due at a time you choose) and the self-updating calendar subscription need
 a tiny server, because an iPhone web app can't notify you or keep time once it's closed. It runs on
 Cloudflare's free plan (`server/`). Only care-task titles, due dates, timer labels and the push address
 are stored there – no photos, devices or keys.
@@ -69,7 +69,7 @@ are stored there – no photos, devices or keys.
    - `CLOUDFLARE_ACCOUNT_ID` = the account ID
 6. **Actions → Deploy to GitHub Pages → Run workflow** (or merge any change). The workflow deploys the
    server and builds the app with its address.
-7. In the app (opened from the home-screen icon): **⚙️ → Turn on notifications → Send test**, then
+7. In the app (opened from the home-screen icon): **⚙️ → Turn on notifications**, pick the reminder time, then
    **Care → Apple Calendar / Google Calendar** to subscribe.
 
 Without these secrets everything else works; the app just offers per-task calendar links instead.

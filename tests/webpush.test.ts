@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { b64urlDecode, b64urlEncode, encryptPayload, generateVapidKeys, vapidAuth } from "../server/src/webpush";
-import { localDay, nextNineAm } from "../server/src/timeutil";
+import { localDay, nextLocalTime, parseTime, reachedLocalTime } from "../server/src/timeutil";
 
 const enc = new TextEncoder();
 async function hkdf(ikm: Uint8Array, salt: Uint8Array, info: Uint8Array, n: number) {
@@ -59,11 +59,29 @@ describe("VAPID (RFC 8292)", () => {
 describe("server time zone helpers", () => {
   it("finds the next 09:00 in Berlin across DST and day boundaries", () => {
     // 27 Nov 2026 08:00 UTC = 09:00 Berlin (CET, UTC+1) → already past? exactly 09:00 → next day
-    expect(new Date(nextNineAm(Date.UTC(2026, 10, 27, 7, 30), "Europe/Berlin")).toISOString()).toBe("2026-11-27T08:00:00.000Z");
-    expect(new Date(nextNineAm(Date.UTC(2026, 10, 27, 9, 0), "Europe/Berlin")).toISOString()).toBe("2026-11-28T08:00:00.000Z");
+    expect(new Date(nextLocalTime(Date.UTC(2026, 10, 27, 7, 30), "Europe/Berlin")).toISOString()).toBe("2026-11-27T08:00:00.000Z");
+    expect(new Date(nextLocalTime(Date.UTC(2026, 10, 27, 9, 0), "Europe/Berlin")).toISOString()).toBe("2026-11-28T08:00:00.000Z");
     // Summer time (CEST, UTC+2)
-    expect(new Date(nextNineAm(Date.UTC(2026, 6, 1, 3, 0), "Europe/Berlin")).toISOString()).toBe("2026-07-01T07:00:00.000Z");
+    expect(new Date(nextLocalTime(Date.UTC(2026, 6, 1, 3, 0), "Europe/Berlin")).toISOString()).toBe("2026-07-01T07:00:00.000Z");
     // 23:30 UTC on the 27th is already the 28th in Berlin
     expect(localDay(Date.UTC(2026, 10, 27, 23, 30), "Europe/Berlin")).toBe("2026-11-28");
   });
 });
+
+describe("custom reminder time", () => {
+  it("uses the chosen local time, also across summer time", () => {
+    expect(new Date(nextLocalTime(Date.UTC(2026, 10, 28, 5, 0), "Europe/Berlin", "07:30")).toISOString()).toBe("2026-11-28T06:30:00.000Z");
+    expect(new Date(nextLocalTime(Date.UTC(2026, 10, 28, 7, 0), "Europe/Berlin", "07:30")).toISOString()).toBe("2026-11-29T06:30:00.000Z");
+    expect(new Date(nextLocalTime(Date.UTC(2026, 6, 1, 12, 0), "Europe/Berlin", "18:45")).toISOString()).toBe("2026-07-01T16:45:00.000Z");
+  });
+  it("knows whether today's time has been reached", () => {
+    expect(reachedLocalTime(Date.UTC(2026, 10, 28, 17, 0), "Europe/Berlin", "18:00")).toBe(true); // 18:00 Berlin
+    expect(reachedLocalTime(Date.UTC(2026, 10, 28, 16, 59), "Europe/Berlin", "18:00")).toBe(false);
+  });
+  it("falls back to 09:00 for invalid values", () => {
+    expect(parseTime("25:00")).toEqual([9, 0]);
+    expect(parseTime(undefined)).toEqual([9, 0]);
+    expect(parseTime("6:05")).toEqual([6, 5]);
+  });
+});
+
