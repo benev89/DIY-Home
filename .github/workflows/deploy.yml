@@ -31,20 +31,41 @@ jobs:
       - run: npm test
       - run: npx tsc -p server --noEmit
       # The push/calendar server (Cloudflare Worker) is deployed only once the
-      # CLOUDFLARE_API_TOKEN secret exists. Without it the app still works, minus
-      # push notifications and calendar subscription.
+      # CLOUDFLARE_API_TOKEN secret exists. If it fails, the app is still published
+      # (just without push notifications and calendar subscription).
       - name: Deploy server to Cloudflare
+        id: server
         if: env.CLOUDFLARE_API_TOKEN != ''
+        continue-on-error: true
         working-directory: server
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RAW_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RAW_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
+          # Secrets pasted on a phone often carry line breaks, spaces or the text around the
+          # token. Pick out just the values (a Cloudflare API token is 40 characters,
+          # an account id 32 hex characters). Only "yes/no" is printed, never a value.
+          token=$(printf '%s' "$RAW_TOKEN" | grep -oE '[A-Za-z0-9_-]{40,}' | head -1 || true)
+          account=$(printf '%s' "$RAW_ACCOUNT" | grep -oiE '[0-9a-f]{32}' | head -1 | tr 'A-F' 'a-f' || true)
+          echo "Token secret: $(printf '%s\n' "$RAW_TOKEN" | wc -l | tr -d ' ') line(s); usable token found: $([ -n "$token" ] && echo yes || echo NO)"
+          echo "Account secret: usable account id found: $([ -n "$account" ] && echo yes || echo NO)"
+          if [ -z "$token" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN does not contain a Cloudflare API token. Save only the token itself as the secret."
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          status=$(curl -s -H "Authorization: Bearer $token" https://api.cloudflare.com/client/v4/user/tokens/verify | grep -oE '"status":"[a-z_]+"' | head -1 || true)
+          echo "Token check with Cloudflare: ${status:-no answer}"
+          export CLOUDFLARE_API_TOKEN="$token"
+          if [ -n "$account" ]; then export CLOUDFLARE_ACCOUNT_ID="$account"; else unset CLOUDFLARE_ACCOUNT_ID; fi
           npx wrangler deploy 2>&1 | tee deploy.log
-          url=$(grep -oE 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -1)
-          if [ -z "$url" ]; then echo "::error::Could not find the server URL in the wrangler output"; exit 1; fi
+          url=$(grep -oE 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -1 || true)
+          if [ -z "$url" ]; then echo "::error::Server deployment failed – see the wrangler output above."; exit 1; fi
           echo "VITE_SERVER_URL=$url" >> "$GITHUB_ENV"
           echo "Server: $url"
+      - name: Warn if the server could not be deployed
+        if: steps.server.outcome == 'failure'
+        run: echo "::warning::The notification server was not deployed. The app is published without push notifications and calendar subscription. Open the 'Deploy server to Cloudflare' step for the reason."
       - run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
