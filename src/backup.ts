@@ -3,8 +3,9 @@ import { db } from "./db";
 
 const FORMAT = "diy-home-backup";
 const VERSION = 1;
-// Never put the API key into a backup file.
-const PRIVATE_SETTINGS = new Set(["apiKey"]);
+// Never put API keys into a backup file. The push address belongs to this phone only.
+// (The server id + secret do go into the backup, so a restored phone keeps the same calendar feed.)
+const PRIVATE_SETTINGS = new Set(["apiKey", "geminiKey", "pushSub", "pushEnabled"]);
 
 async function blobToDataUrl(blob: Blob): Promise<string> {
   const buf = new Uint8Array(await blob.arrayBuffer());
@@ -48,7 +49,7 @@ export async function importAll(json: string): Promise<void> {
   if (b.version > VERSION) throw new Error("This backup is from a newer version of the app.");
   const tables = [db.areas, db.items, db.tools, db.repairs, db.usage, db.settings, db.files, db.tasks];
   await db.transaction("rw", tables, async () => {
-    const apiKey = await db.settings.get("apiKey");
+    const keep = (await db.settings.toArray()).filter((x) => PRIVATE_SETTINGS.has(x.key)); // this device's keys
     await Promise.all(tables.map((t) => t.clear()));
     await db.areas.bulkAdd(b.areas);
     await db.items.bulkAdd(b.items);
@@ -57,7 +58,7 @@ export async function importAll(json: string): Promise<void> {
     await db.usage.bulkAdd(b.usage ?? []);
     await db.tasks.bulkAdd(b.tasks ?? []);
     await db.settings.bulkPut(b.settings);
-    if (apiKey) await db.settings.put(apiKey); // keep this device's key
+    await db.settings.bulkPut(keep);
     await db.files.bulkAdd(
       b.files.map((f: { id: number; name: string; type: string; createdAt: number; data: string }) => ({
         id: f.id,

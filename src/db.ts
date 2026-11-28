@@ -51,6 +51,8 @@ export interface Task {
   nextDue: number;
   lastDone?: number;
   doneLog: number[];
+  /** Stop calendar entries and push reminders after this date ("YYYY-MM-DD"), e.g. when you plan to replace the device. */
+  remindUntil?: string;
   createdAt: number;
 }
 

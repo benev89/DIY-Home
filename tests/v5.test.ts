@@ -80,7 +80,7 @@ describe("calendar links", () => {
     const u = new URL(googleEventUrl({ ...task, itemName: "Wasserkocher" }, new Date(2026, 10, 27).getTime()));
     expect(u.searchParams.get("text")).toBe("🔧 Entkalken – Wasserkocher");
     expect(u.searchParams.get("dates")).toBe("20261203/20261204");
-    expect(u.searchParams.get("recur")).toBe("RRULE:FREQ=MONTHLY;INTERVAL=3");
+    expect(u.searchParams.get("recur")).toBe("RRULE:FREQ=MONTHLY;INTERVAL=3;UNTIL=20281127"); // 2 years ahead by default
   });
   it("leaves out alarms in the subscribed feed when push reminds instead", () => {
     expect(buildIcs([task], 0, { alarms: false, name: "DIY Home" })).not.toContain("VALARM");

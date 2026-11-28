@@ -13,6 +13,7 @@ export async function autoFindManual(itemId: number): Promise<{ url: string; tit
     name: item.name,
     brand: item.brand,
     model: item.model,
+    geminiKey: (await getSetting("geminiKey", "")) || undefined,
   });
   await db.usage.add({ at: Date.now(), model: res.model, inputTokens: res.inputTokens, outputTokens: res.outputTokens, costUsd: res.costUsd });
   const fresh = await db.items.get(itemId);

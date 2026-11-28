@@ -78,12 +78,15 @@ export async function syncNow(): Promise<void> {
   const nameOf = (id?: number) => items.find((i) => i.id === id)?.name;
   const withNames = tasks.map((t) => ({ ...t, itemName: nameOf(t.itemId) }));
   const pushOn = await getSetting("pushEnabled", false);
+  const horizonYears = await getSetting("calendarYears", 2);
+  const today = new Date().toISOString().slice(0, 10);
+  const active = withNames.filter((t) => !t.remindUntil || t.remindUntil >= today);
   const res = await call("PUT", "state", {
     tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
     lang: await getSetting<Lang>("lang", "en"),
     // No alarms in the subscribed calendar: the 09:00 push already reminds you, once.
-    ics: buildIcs(withNames, Date.now(), { alarms: !pushOn, name: "DIY Home" }),
-    tasks: withNames.map((t) => ({ title: t.title, item: t.itemName, nextDue: t.nextDue })),
+    ics: buildIcs(withNames, Date.now(), { alarms: !pushOn, name: "DIY Home", horizonYears }),
+    tasks: active.map((t) => ({ title: t.title, item: t.itemName, nextDue: t.nextDue })),
     reminders: pushOn && (await getSetting("careReminders", true)),
     sub: pushOn ? ((await getSetting("pushSub", null)) ?? undefined) : undefined,
   });

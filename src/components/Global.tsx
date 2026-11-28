@@ -78,8 +78,8 @@ export function SyncAgent() {
   const fingerprint = useLiveQuery(async () => {
     const tasks = await db.tasks.toArray();
     const items = await db.items.toArray();
-    const settings = await db.settings.bulkGet(["lang", "pushEnabled", "careReminders"]);
-    return JSON.stringify([tasks.map((x) => [x.id, x.title, x.nextDue, x.intervalDays, x.itemId]), items.map((i) => [i.id, i.name]), settings.map((s) => s?.value)]);
+    const settings = await db.settings.bulkGet(["lang", "pushEnabled", "careReminders", "calendarYears"]);
+    return JSON.stringify([tasks.map((x) => [x.id, x.title, x.nextDue, x.intervalDays, x.itemId, x.remindUntil]), items.map((i) => [i.id, i.name]), settings.map((s) => s?.value)]);
   }, []);
   useEffect(() => {
     if (fingerprint) syncSoon();

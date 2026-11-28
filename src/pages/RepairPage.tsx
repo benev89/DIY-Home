@@ -127,6 +127,16 @@ export default function RepairPage() {
                 🔎 {t.researchFound} ({repair.research.sources.length} {t.sources})
               </summary>
               <p className="pre">{repair.research.summary}</p>
+              {repair.research.suggestionsHtml && (
+                // Google requires showing its search suggestions next to answers grounded with Google Search.
+                <iframe
+                  className="google-suggestions"
+                  title="Google Search Suggestions"
+                  sandbox="allow-popups allow-popups-to-escape-sandbox"
+                  srcDoc={`<base target="_blank">${repair.research.suggestionsHtml}`}
+                />
+              )}
+              <small className="muted">{repair.research.provider === "gemini" ? t.viaGemini : t.viaClaude}</small>
               <ul>
                 {repair.research.sources.map((src) => (
                   <li key={src.url}>

@@ -5,11 +5,13 @@ import { useI18n } from "../i18n";
 import { bucket, dueLabel, INTERVAL_CHOICES, intervalLabel } from "../care";
 import { exportToCalendar, googleEventUrl } from "../calendar";
 import { hasServer } from "../server";
+import { useCalendarYears } from "./CalendarSubscribe";
 
 /** One maintenance task: tap ✓ when done; tap the text for details. */
 export function TaskRow({ task, itemName }: { task: Task; itemName?: string }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  const years = useCalendarYears();
   const b = bucket(task.nextDue);
   const doneToday = !!task.lastDone && new Date(task.lastDone).toDateString() === new Date().toDateString();
   return (
@@ -20,6 +22,7 @@ export function TaskRow({ task, itemName }: { task: Task; itemName?: string }) {
           <small>
             {itemName ? `${itemName} · ` : ""}
             {intervalLabel(task.intervalDays, t)} · <span className={`due due-${b}`}>{dueLabel(task.nextDue, t)}</span>
+            {task.remindUntil && ` · ${t.until} ${new Date(`${task.remindUntil}T12:00:00`).toLocaleDateString()}`}
           </small>
         </button>
         <button className={`done-btn ${doneToday ? "on" : ""}`} onClick={() => markTaskDone(task.id!)} aria-label={t.markDone}>
@@ -47,6 +50,14 @@ export function TaskRow({ task, itemName }: { task: Task; itemName?: string }) {
               ))}
             </select>
           </label>
+          <label className="inline-label">
+            {t.remindUntil}
+            <input
+              type="date"
+              value={task.remindUntil ?? ""}
+              onChange={(e) => db.tasks.update(task.id!, { remindUntil: e.target.value || undefined })}
+            />
+          </label>
           {task.doneLog.length > 0 && (
             <small className="muted">
               {t.lastDone}: {task.doneLog.slice(-3).reverse().map((d) => new Date(d).toLocaleDateString()).join(", ")}
@@ -54,10 +65,10 @@ export function TaskRow({ task, itemName }: { task: Task; itemName?: string }) {
           )}
           {!hasServer() && (
             <div className="row-wrap">
-              <a className="btn" href={googleEventUrl({ ...task, itemName })} target="_blank" rel="noreferrer">
+              <a className="btn" href={googleEventUrl({ ...task, itemName }, Date.now(), years)} target="_blank" rel="noreferrer">
                 📅 Google
               </a>
-              <button className="btn" onClick={() => exportToCalendar([{ ...task, itemName }], `${task.title}.ics`)}>
+              <button className="btn" onClick={() => exportToCalendar([{ ...task, itemName }], `${task.title}.ics`, years)}>
                 📅 Apple / .ics
               </button>
             </div>
