@@ -6,7 +6,7 @@ import { describeError, testKey } from "../ai";
 import { downloadText, exportAll, importAll } from "../backup";
 import { formatUsd, Header } from "../components/ui";
 import { testGemini } from "../gemini";
-import { disablePush, enablePush, hasServer, pushSupported, testPush } from "../server";
+import { disablePush, enablePush, hasServer, pushSupported } from "../server";
 import { CalendarSubscribe } from "../components/CalendarSubscribe";
 import { isIosSafariTab } from "./Home";
 
@@ -103,7 +103,9 @@ export default function SettingsPage() {
             onClick={async () => {
               setGeminiStatus("…");
               const r = await testGemini(geminiKey.trim());
-              setGeminiStatus(!r.keyOk ? `${t.geminiKeyBad} (${r.error})` : r.grounding ? `${t.geminiOk} (${r.model})` : t.geminiNoGrounding);
+              setGeminiStatus(
+                r.busy ? t.geminiBusy : !r.keyOk ? `${t.geminiKeyBad} (${r.error})` : r.grounding ? `${t.geminiOk} (${r.model})` : t.geminiNoGrounding,
+              );
             }}
           >
             {t.testGemini}
@@ -164,6 +166,7 @@ function NotificationsSection() {
   const { t } = useI18n();
   const enabled = useLiveQuery(async () => !!(await db.settings.get("pushEnabled"))?.value, []);
   const careReminders = useLiveQuery(async () => ((await db.settings.get("careReminders"))?.value as boolean | undefined) ?? true, []);
+  const reminderTime = useLiveQuery(async () => ((await db.settings.get("reminderTime"))?.value as string | undefined) ?? "09:00", []);
   const [status, setStatus] = useState<string>();
 
   if (!hasServer()) {
@@ -194,16 +197,21 @@ function NotificationsSection() {
           <p className="ok-text">✓ {t.pushOn}</p>
           <label className="check">
             <input type="checkbox" checked={careReminders} onChange={(e) => setSetting("careReminders", e.target.checked)} />
-            {t.careReminderAt9}
+            {t.careReminderAt}
           </label>
-          <div className="row-wrap">
-            <button className="btn" onClick={async () => setStatus((await testPush()) === "sent" ? t.testSent : t.testFailed)}>
-              {t.sendTest}
-            </button>
-            <button className="btn ghost" onClick={() => disablePush()}>
-              {t.turnOff}
-            </button>
-          </div>
+          {careReminders && (
+            <label className="inline-label">
+              {t.reminderTimeLabel}
+              <input
+                type="time"
+                value={reminderTime ?? "09:00"}
+                onChange={(e) => e.target.value && setSetting("reminderTime", e.target.value)}
+              />
+            </label>
+          )}
+          <button className="btn ghost" onClick={() => disablePush()}>
+            {t.turnOff}
+          </button>
         </div>
       ) : (
         <button className="btn primary" onClick={turnOn}>

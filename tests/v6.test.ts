@@ -105,3 +105,23 @@ describe("backup privacy", () => {
     expect((await db.settings.get("geminiKey"))?.value).toBe("AIza-this-phone");
   });
 });
+
+describe("Gemini busy", () => {
+  it("retries once when Google is overloaded, then succeeds", async () => {
+    let n = 0;
+    vi.stubGlobal("fetch", async () => (++n === 1 ? json({ error: { code: 503, message: "The model is overloaded. Please try again later.", status: "UNAVAILABLE" } }, 503) : json(grounded("ok", ["a.de"]))));
+    const r = await geminiSearch("k", "q", 1);
+    expect(r.model).toBe("gemini-flash-latest");
+    expect(n).toBe(2);
+  });
+});
+
+describe("calendar alarm time", () => {
+  const task: Task = { id: 1, title: "Entkalken", intervalDays: 90, nextDue: new Date(2026, 11, 3).getTime(), doneLog: [], createdAt: 1 };
+  it("rings at the chosen time on the due day", () => {
+    const now = new Date(2026, 10, 28).getTime();
+    expect(buildIcs([task], now, { alarmTime: "07:30" })).toContain("TRIGGER:PT7H30M");
+    expect(buildIcs([task], now, { alarmTime: "18:00" })).toContain("TRIGGER:PT18H\r\n");
+    expect(buildIcs([task], now, {})).toContain("TRIGGER:PT9H\r\n");
+  });
+});

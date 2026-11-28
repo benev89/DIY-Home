@@ -66,12 +66,25 @@ async function call(apiKey: string, model: string, prompt: string, grounded: boo
   return out;
 }
 
+/** Google says "overloaded" / "UNAVAILABLE" (HTTP 503) or "too many requests" (429) when busy. */
+export const isBusy = (e: unknown) =>
+  e instanceof GeminiError && (e.status === 503 || e.status === 429 || /overloaded|unavailable|try again later/i.test(e.message));
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /** A grounded answer from the first model that works; throws the last error if none does. */
-export async function geminiSearch(apiKey: string, prompt: string): Promise<GeminiGrounded> {
+export async function geminiSearch(apiKey: string, prompt: string, retryDelayMs = 1500): Promise<GeminiGrounded> {
   let last: unknown;
-  for (const model of GEMINI_MODELS) {
+  for (const [i, model] of GEMINI_MODELS.entries()) {
     try {
-      return await call(apiKey, model, prompt, true);
+      try {
+        return await call(apiKey, model, prompt, true);
+      } catch (e) {
+        // Busy: one short retry on the main model (spikes are brief); other models are tried once.
+        if (!isBusy(e) || i > 0) throw e;
+        await wait(retryDelayMs);
+        return await call(apiKey, model, prompt, true);
+      }
     } catch (e) {
       last = e;
       // A wrong key won't work with any model: stop early.
@@ -82,11 +95,14 @@ export async function geminiSearch(apiKey: string, prompt: string): Promise<Gemi
 }
 
 /** Quick check for Settings: is the key valid, and does Google search work with it for free? */
-export async function testGemini(apiKey: string): Promise<{ keyOk: boolean; grounding: boolean; model?: string; error?: string }> {
+export async function testGemini(
+  apiKey: string,
+): Promise<{ keyOk: boolean; grounding: boolean; busy?: boolean; model?: string; error?: string }> {
   try {
     const r = await geminiSearch(apiKey, "What is today's date? Answer in one short sentence.");
     return { keyOk: true, grounding: r.sources.length > 0 || !!r.suggestionsHtml, model: r.model };
   } catch (e) {
+    if (isBusy(e)) return { keyOk: true, grounding: false, busy: true, error: e instanceof Error ? e.message : String(e) };
     try {
       await call(apiKey, GEMINI_MODELS[0], "Reply with OK.", false);
       return { keyOk: true, grounding: false, error: e instanceof Error ? e.message : String(e) };

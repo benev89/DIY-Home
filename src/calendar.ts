@@ -55,9 +55,11 @@ export function reminderEnd(t: Pick<Task, "remindUntil">, now: number, horizonYe
 export function buildIcs(
   tasks: (Task & { itemName?: string })[],
   now = Date.now(),
-  opts: { alarms?: boolean; name?: string; horizonYears?: number } = {},
+  opts: { alarms?: boolean; alarmTime?: string; name?: string; horizonYears?: number } = {},
 ): string {
   const alarms = opts.alarms ?? true;
+  const [ah, am] = /^(\d{1,2}):(\d{2})$/.exec(opts.alarmTime ?? "")?.slice(1).map(Number) ?? [9, 0];
+  const trigger = `TRIGGER:PT${ah}H${am ? `${am}M` : ""}`; // minutes after midnight of the (all-day) due date
   const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//DIY Home//Care reminders//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH"];
   if (opts.name) lines.push(`X-WR-CALNAME:${escape(opts.name)}`, "REFRESH-INTERVAL;VALUE=DURATION:PT1H", "X-PUBLISHED-TTL:PT1H");
   for (const t of tasks) {
@@ -75,7 +77,7 @@ export function buildIcs(
       `SUMMARY:${escape(title)}`,
       ...(t.how ? [`DESCRIPTION:${escape(t.how)}`] : []),
       "TRANSP:TRANSPARENT",
-      ...(alarms ? ["BEGIN:VALARM", "ACTION:DISPLAY", `DESCRIPTION:${escape(title)}`, "TRIGGER:PT9H", "END:VALARM"] : []), // 09:00 on the due day
+      ...(alarms ? ["BEGIN:VALARM", "ACTION:DISPLAY", `DESCRIPTION:${escape(title)}`, trigger, "END:VALARM"] : []),
       "END:VEVENT",
     );
   }
@@ -87,8 +89,13 @@ export function buildIcs(
  * Hand the file to the phone. On iPhone the share sheet opens; choose "Calendar" (or "Save to Files",
  * then open the file and tap "Add All"). Elsewhere the file is downloaded and opens in the calendar app.
  */
-export async function exportToCalendar(tasks: (Task & { itemName?: string })[], filename = "diy-home-pflege.ics", horizonYears = 2) {
-  const file = new File([buildIcs(tasks, Date.now(), { horizonYears })], filename, { type: "text/calendar" });
+export async function exportToCalendar(
+  tasks: (Task & { itemName?: string })[],
+  filename = "diy-home-pflege.ics",
+  horizonYears = 2,
+  alarmTime = "09:00",
+) {
+  const file = new File([buildIcs(tasks, Date.now(), { horizonYears, alarmTime })], filename, { type: "text/calendar" });
   if (navigator.canShare?.({ files: [file] })) {
     try {
       await navigator.share({ files: [file] });
